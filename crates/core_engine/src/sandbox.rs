@@ -8,6 +8,8 @@ pub const REQUIRED_DIRS: &[&str] = &[
     "bin/nginx",
     "bin/php",
     "bin/mysql",
+    "bin/shims",
+    "temp/composer",
     "conf/vhosts",
     "conf/ssl",
     "templates",

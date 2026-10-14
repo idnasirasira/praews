@@ -49,6 +49,13 @@ http {
             include "{{ app_root }}/bin/nginx/conf/fastcgi_params";
         }
 
+        # Mobile HTTPS: install this Root CA once on the phone, then all *.test get a green lock.
+        location = /rootCA.crt {
+            alias "{{ app_root }}/conf/ssl/rootCA.crt";
+            default_type application/x-x509-ca-cert;
+            add_header Content-Disposition "attachment; filename=praews-rootCA.crt";
+        }
+
         location ~ /\.(?!well-known).* {
             deny all;
         }

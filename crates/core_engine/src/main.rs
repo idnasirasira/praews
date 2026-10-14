@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use core_engine::{
-    add_site, init_sandbox, render_all_configs, resolve_app_root, BinaryManager, LocalDnsServer,
-    ProcessOrchestrator, SandboxConfig, ServiceType, SslManager,
+    add_site, init_sandbox, render_all_configs, resolve_app_root, BinaryManager, CliEnvManager,
+    LocalDnsServer, ProcessOrchestrator, SandboxConfig, ServiceType, SslManager,
 };
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
@@ -81,6 +81,26 @@ enum Commands {
     Dns {
         #[arg(long, default_value_t = 53535)]
         port: u16,
+    },
+
+    /// Ensure composer shims (+ optionally download composer.phar)
+    EnsureComposer {
+        #[arg(long, default_value_t = true)]
+        download: bool,
+    },
+
+    /// Print scoped export snippet for the active PHP version (eval-friendly)
+    EnvSnippet {
+        #[arg(long, default_value = "8.3")]
+        php_version: String,
+    },
+
+    /// Open an OS terminal with portable PHP/MySQL/Composer PATH injected
+    OpenTerminal {
+        #[arg(long)]
+        path: PathBuf,
+        #[arg(long, default_value = "8.3")]
+        php_version: String,
     },
 
     /// Show tracked service statuses
@@ -256,6 +276,29 @@ async fn main() -> Result<()> {
             println!("DNS listening on UDP :{port} — Ctrl+C to stop");
             tokio::signal::ctrl_c().await?;
             dns.stop();
+        }
+        Commands::EnsureComposer { download } => {
+            init_sandbox(&app_root)?;
+            let cli = CliEnvManager::new(&app_root);
+            let shims = cli.ensure_composer_shims()?;
+            if download {
+                let client = reqwest::Client::builder()
+                    .user_agent("praews/0.1")
+                    .build()?;
+                let phar = cli.ensure_composer_phar(&client).await?;
+                println!("composer.phar at {}", phar.display());
+            }
+            println!("shims ready at {}", shims.display());
+        }
+        Commands::EnvSnippet { php_version } => {
+            let cli = CliEnvManager::new(&app_root);
+            println!("{}", cli.export_shell_snippet(&php_version)?);
+        }
+        Commands::OpenTerminal { path, php_version } => {
+            init_sandbox(&app_root)?;
+            let cli = CliEnvManager::new(&app_root);
+            cli.open_project_terminal(&path, &php_version)?;
+            println!("opened terminal in {} (PHP {php_version})", path.display());
         }
         Commands::Status => {
             let orch = ProcessOrchestrator::new(&app_root);
