@@ -292,6 +292,7 @@ async fn get_app_info(state: State<'_, AppState>) -> Result<serde_json::Value, S
         .collect();
     let php_platform = php_platform_info(state.binary_manager.manifest());
     Ok(serde_json::json!({
+        "app_version": env!("CARGO_PKG_VERSION"),
         "app_root": state.app_root.to_string_lossy(),
         "default_app_root": default_app_root().to_string_lossy(),
         "root_pointer": root_pointer_path().to_string_lossy(),
@@ -2207,10 +2208,19 @@ pub fn run() {
         config_editor: Arc::new(ConfigEditorManager::new(&app_root)),
     };
 
-    let app = tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(app_state)
+        .plugin(tauri_plugin_process::init())
+        .manage(app_state);
+
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
+    let app = builder
         .setup(|app| {
             apply_macos_dock_icon();
             setup_system_tray(app)?;

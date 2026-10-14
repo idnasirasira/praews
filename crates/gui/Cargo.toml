@@ -31,6 +31,7 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tauri-plugin-dialog = "2"
+tauri-plugin-process = "2.4.0"
 
 # `cargo run` launches a bare binary — macOS Dock shows the generic "exec"
 # glyph unless we push our icon via NSApplication at startup.
@@ -38,3 +39,6 @@ tauri-plugin-dialog = "2"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSData"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage"] }
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-updater = "2.13.3"

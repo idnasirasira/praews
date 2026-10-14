@@ -13,8 +13,11 @@ const busyAction = ref("");
 const htdocsEnabled = ref(false);
 const htdocsPath = ref("");
 const busyHtdocs = ref(false);
+const busyUpdate = ref(false);
+const updateInfo = ref("");
 
 const currentRoot = computed(() => store.appRoot);
+const appVersion = computed(() => store.state.info?.app_version || "1.0.0");
 const usingCustom = computed(() => !!store.state.info?.using_custom_root);
 const defaultRoot = computed(
   () => store.state.info?.default_app_root || "—"
@@ -51,6 +54,34 @@ async function reinstall(component) {
   await store.install(component);
   await store.refreshInfo();
   busyAction.value = "";
+}
+
+async function checkForUpdates() {
+  busyUpdate.value = true;
+  updateInfo.value = "";
+  store.setBusy(true);
+  store.setProgress("Checking for updates…");
+  try {
+    const { check } = await import("@tauri-apps/plugin-updater");
+    const { relaunch } = await import("@tauri-apps/plugin-process");
+    const update = await check();
+    if (!update) {
+      updateInfo.value = `You're on the latest version (${appVersion.value}).`;
+      store.setProgress(updateInfo.value, "ok");
+    } else {
+      updateInfo.value = `Update ${update.version} available — downloading…`;
+      store.setProgress(updateInfo.value);
+      await update.downloadAndInstall();
+      store.setProgress(`Installed ${update.version}. Relaunching…`, "ok");
+      await relaunch();
+    }
+  } catch (err) {
+    const msg = String(err);
+    updateInfo.value = msg;
+    store.setProgress(msg, "error");
+  }
+  store.setBusy(false);
+  busyUpdate.value = false;
 }
 
 async function applyRoot() {
@@ -140,6 +171,30 @@ async function saveHtdocs() {
         placeholder="Optional project path for terminal"
       />
     </form>
+  </section>
+
+  <section class="pane view-pane root-pane" aria-labelledby="updates-title">
+    <div class="pane-head">
+      <div>
+        <h2 id="updates-title">Updates</h2>
+        <p class="view-lede">
+          Check GitHub Releases for a newer praews build. Signed updates install in-place, then
+          relaunch.
+        </p>
+      </div>
+    </div>
+    <p class="root-meta">Current version <code>{{ appVersion }}</code></p>
+    <div class="ports-actions">
+      <button
+        class="btn btn-go"
+        type="button"
+        :disabled="busyUpdate"
+        @click="checkForUpdates"
+      >
+        {{ busyUpdate ? "Checking…" : "Check for updates" }}
+      </button>
+    </div>
+    <p v-if="updateInfo" class="root-help">{{ updateInfo }}</p>
   </section>
 
   <section class="pane view-pane root-pane" aria-labelledby="stack-bin-title">

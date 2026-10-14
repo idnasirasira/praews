@@ -4,6 +4,12 @@ Portable local web server environment (Nginx + PHP + MariaDB) built with Rust â€
 
 **v1.0 (macOS first):** Apple Silicon is the primary release target. Windows and Intel Mac MariaDB downloads can follow.
 
+## Releases & updates
+
+- GitHub: https://github.com/idnasirasira/praews
+- Tag a version (`git tag v1.0.1 && git push origin v1.0.1`) to draft a Release via Actions
+- The app can check for updates from **Tools â†’ Check for updates** (signed GitHub Release artifacts)
+
 ## Workspace
 
 | Crate | Role |
