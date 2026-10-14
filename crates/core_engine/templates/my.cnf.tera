@@ -1,0 +1,37 @@
+[client]
+port = {{ mysql_port }}
+socket = "{{ app_root }}/temp/mysql/mysql.sock"
+default-character-set = utf8mb4
+
+[mysqld]
+port = {{ mysql_port }}
+bind-address = 127.0.0.1
+basedir = "{{ app_root }}/bin/mysql"
+datadir = "{{ app_root }}/data/mysql"
+tmpdir  = "{{ app_root }}/temp/mysql"
+socket  = "{{ app_root }}/temp/mysql/mysql.sock"
+pid-file = "{{ app_root }}/temp/mysql/mysql.pid"
+
+# Logging
+log_error = "{{ app_root }}/logs/mysql_error.log"
+general_log = 0
+general_log_file = "{{ app_root }}/logs/mysql_query.log"
+slow_query_log = 1
+slow_query_log_file = "{{ app_root }}/logs/mysql_slow.log"
+long_query_time = 2
+
+# Character Set
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+
+# Local-dev performance
+skip-name-resolve
+default_storage_engine = InnoDB
+innodb_buffer_pool_size = 256M
+innodb_log_file_size = 64M
+innodb_file_per_table = 1
+max_allowed_packet = 64M
+max_connections = 150
+
+# Easier imports of older dumps
+sql_mode = NO_ENGINE_SUBSTITUTION

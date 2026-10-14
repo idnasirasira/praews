@@ -1,0 +1,58 @@
+# Kept in foreground so Rust ProcessOrchestrator owns the lifecycle
+daemon off;
+worker_processes auto;
+
+error_log "{{ app_root }}/logs/nginx_error.log" warn;
+pid       "{{ app_root }}/temp/nginx/nginx.pid";
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include       "{{ app_root }}/bin/nginx/conf/mime.types";
+    default_type  application/octet-stream;
+
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent"';
+
+    access_log "{{ app_root }}/logs/nginx_access.log" main;
+
+    sendfile            on;
+    keepalive_timeout   65;
+    client_max_body_size 128M;
+
+    # Force all temp dirs into the portable sandbox
+    client_body_temp_path "{{ app_root }}/temp/nginx/client_body";
+    proxy_temp_path       "{{ app_root }}/temp/nginx/proxy";
+    fastcgi_temp_path     "{{ app_root }}/temp/nginx/fastcgi";
+    uwsgi_temp_path       "{{ app_root }}/temp/nginx/uwsgi";
+    scgi_temp_path        "{{ app_root }}/temp/nginx/scgi";
+
+    server {
+        listen {{ http_port }};
+        server_name localhost 127.0.0.1;
+        root "{{ app_root }}/htdocs";
+        index index.php index.html index.htm;
+
+        location / {
+            try_files $uri $uri/ /index.php?$query_string;
+        }
+
+        location ~ \.php$ {
+            try_files $uri =404;
+            fastcgi_split_path_info ^(.+\.php)(/.+)$;
+            fastcgi_pass 127.0.0.1:{{ php_fastcgi_port }};
+            fastcgi_index index.php;
+            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+            include "{{ app_root }}/bin/nginx/conf/fastcgi_params";
+        }
+
+        location ~ /\.(?!well-known).* {
+            deny all;
+        }
+    }
+
+    include "{{ app_root }}/conf/vhosts/*.conf";
+}

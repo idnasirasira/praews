@@ -1,0 +1,15 @@
+/target/
+**/*.rs.bk
+.DS_Store
+*.swp
+*.swo
+
+# Portable sandbox runtime (generated locally)
+/sandbox/
+/workspace/
+**/state.json
+
+# IDE
+.idea/
+.vscode/
+*.iml

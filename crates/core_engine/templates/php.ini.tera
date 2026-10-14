@@ -1,0 +1,76 @@
+[PHP]
+engine = On
+short_open_tag = Off
+precision = 14
+output_buffering = 4096
+zlib.output_compression = Off
+implicit_flush = Off
+serialize_precision = -1
+zend.enable_gc = On
+expose_php = On
+
+; Resource Limits (local development)
+max_execution_time = 300
+max_input_time = 300
+memory_limit = 512M
+
+; Error Handling & Logging
+error_reporting = E_ALL
+display_errors = On
+display_startup_errors = On
+log_errors = On
+error_log = "{{ app_root }}/logs/php_error.log"
+
+; File Uploads & Post Data
+post_max_size = 128M
+file_uploads = On
+upload_tmp_dir = "{{ app_root }}/temp/php/uploads"
+upload_max_filesize = 128M
+max_file_uploads = 20
+
+; Dynamic Extension Directory
+{% if is_windows %}
+extension_dir = "{{ app_root }}/bin/php/{{ php_version }}/ext"
+{% else %}
+extension_dir = "{{ app_root }}/bin/php/{{ php_version }}/lib/php/extensions"
+{% endif %}
+
+; Essential extensions for modern PHP apps
+extension=curl
+extension=fileinfo
+extension=gd
+extension=intl
+extension=mbstring
+extension=exif
+extension=mysqli
+extension=openssl
+extension=pdo_mysql
+extension=pdo_sqlite
+extension=sqlite3
+extension=zip
+
+[Date]
+date.timezone = "{{ timezone }}"
+
+[Session]
+session.save_handler = files
+session.save_path = "{{ app_root }}/temp/php/sessions"
+session.use_strict_mode = 0
+session.use_cookies = 1
+session.use_only_cookies = 1
+session.name = PHPSESSID
+
+[curl]
+curl.cainfo = "{{ app_root }}/conf/ssl/cacert.pem"
+
+[openssl]
+openssl.cafile = "{{ app_root }}/conf/ssl/cacert.pem"
+
+[opcache]
+zend_extension=opcache
+opcache.enable=1
+opcache.enable_cli=1
+opcache.memory_consumption=128
+opcache.interned_strings_buffer=8
+opcache.max_accelerated_files=10000
+opcache.revalidate_freq=0
