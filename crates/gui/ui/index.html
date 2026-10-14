@@ -47,13 +47,36 @@
       </section>
 
       <section>
+        <h2>Mobile / HTTPS</h2>
+        <p class="hint" id="dns-hint">—</p>
+        <p class="hint">Root CA: <a id="root-ca-link" href="#" target="_blank">/rootCA.crt</a></p>
+        <p class="hint">Zero-config link: <a id="mobile-link" href="#" target="_blank">sslip.io</a></p>
+      </section>
+
+      <section>
+        <h2>Install binaries</h2>
+        <div class="row">
+          <button id="btn-install-nginx">Nginx</button>
+          <button id="btn-install-php">PHP</button>
+          <button id="btn-install-mariadb">MariaDB</button>
+          <button id="btn-verify">Verify portable</button>
+        </div>
+        <p class="hint" id="progress"></p>
+      </section>
+
+      <section>
         <h2>Tools</h2>
         <div class="row">
           <button id="btn-trust-ca">Trust Root CA</button>
           <button id="btn-open-term">Open Terminal</button>
+          <button id="btn-refresh-logs">Refresh logs</button>
         </div>
         <p class="hint" id="root">Sandbox: —</p>
-        <p class="hint" id="progress"></p>
+      </section>
+
+      <section>
+        <h2>Logs</h2>
+        <pre id="logs" class="logs">(no logs yet)</pre>
       </section>
     </main>
 

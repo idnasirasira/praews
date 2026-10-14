@@ -11,8 +11,9 @@ use tauri::{
 use tokio::sync::Mutex;
 
 use core_engine::{
-    add_site, get_local_lan_ip, init_sandbox, render_all_configs, BinaryManager, CliEnvManager,
-    LocalDnsServer, ProcessOrchestrator, SandboxConfig, ServiceStatus, ServiceType, SslManager,
+    add_site, get_local_lan_ip, init_sandbox, render_all_configs, verify_portable_layout,
+    BinaryManager, CliEnvManager, LocalDnsServer, ProcessOrchestrator, SandboxConfig,
+    ServiceStatus, ServiceType, SslManager,
 };
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -96,12 +97,99 @@ fn resolve_portable_app_root() -> PathBuf {
 #[tauri::command]
 async fn get_app_info(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let settings = state.settings.lock().await.clone();
-    let lan_ip = get_local_lan_ip().to_string();
+    let lan_ip = get_local_lan_ip();
+    let mobile_url = format!(
+        "http://praews.{}.sslip.io:{}",
+        lan_ip, settings.http_port
+    );
+    let root_ca_url = format!("http://{}:{}/rootCA.crt", lan_ip, settings.http_port);
     Ok(serde_json::json!({
         "app_root": state.app_root.to_string_lossy(),
-        "lan_ip": lan_ip,
+        "lan_ip": lan_ip.to_string(),
+        "mobile_url": mobile_url,
+        "root_ca_url": root_ca_url,
+        "dns_hint": format!(
+            "Phone Wi-Fi DNS → {} (port {}). Or open {}",
+            lan_ip, settings.dns_port, mobile_url
+        ),
         "settings": settings,
     }))
+}
+
+#[tauri::command]
+async fn read_recent_logs(
+    state: State<'_, AppState>,
+    lines: Option<usize>,
+) -> Result<String, String> {
+    let n = lines.unwrap_or(80);
+    let log_dir = state.app_root.join("logs");
+    let candidates = [
+        "nginx_error.log",
+        "php_error.log",
+        "mysql_error.log",
+        "nginx_process.log",
+        "php_process.log",
+        "mysql_process.log",
+    ];
+    let mut out = String::new();
+    for name in candidates {
+        let path = log_dir.join(name);
+        if !path.exists() {
+            continue;
+        }
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let tail: Vec<&str> = content.lines().rev().take(n / candidates.len().max(1)).collect();
+        if tail.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("===== {name} =====\n"));
+        for line in tail.into_iter().rev() {
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    if out.is_empty() {
+        out.push_str("(no log files yet)");
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+async fn install_manifest_component(
+    app_handle: AppHandle,
+    component: String,
+    php_version: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let platform = state.binary_manager.manifest().for_current_platform();
+    let (name, spec) = match component.as_str() {
+        "nginx" => ("nginx", &platform.nginx),
+        "mariadb" | "mysql" => ("mariadb", &platform.mariadb),
+        "php" => {
+            let ver = php_version.unwrap_or_else(|| "8.3".into());
+            let spec = platform
+                .php
+                .get(&ver)
+                .ok_or_else(|| format!("PHP {ver} missing from manifest"))?;
+            ("php", spec)
+        }
+        other => return Err(format!("unknown component: {other}")),
+    };
+    let app_clone = app_handle.clone();
+    state
+        .binary_manager
+        .install_from_spec(name, spec, move |progress| {
+            let _ = app_clone.emit("download-progress", progress);
+        })
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn verify_portable(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let report = verify_portable_layout(&state.app_root).map_err(|e| e.to_string())?;
+    serde_json::to_value(report).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -423,9 +511,12 @@ pub fn run() {
             stop_all_services,
             switch_php_version,
             download_and_install_binary,
+            install_manifest_component,
             create_virtual_host,
             trust_local_root_ca,
             open_project_terminal,
+            read_recent_logs,
+            verify_portable,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Tauri app");

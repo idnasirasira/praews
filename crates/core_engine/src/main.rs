@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use core_engine::{
-    add_site, init_sandbox, render_all_configs, resolve_app_root, BinaryManager, CliEnvManager,
-    LocalDnsServer, ProcessOrchestrator, SandboxConfig, ServiceType, SslManager,
+    add_site, init_sandbox, render_all_configs, resolve_app_root, verify_portable_layout,
+    BinaryManager, CliEnvManager, LocalDnsServer, ProcessOrchestrator, SandboxConfig, ServiceType,
+    SslManager,
 };
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
@@ -102,6 +103,9 @@ enum Commands {
         #[arg(long, default_value = "8.3")]
         php_version: String,
     },
+
+    /// Verify sandbox layout is self-contained (Phase 6)
+    VerifyPortable,
 
     /// Show tracked service statuses
     Status,
@@ -299,6 +303,14 @@ async fn main() -> Result<()> {
             let cli = CliEnvManager::new(&app_root);
             cli.open_project_terminal(&path, &php_version)?;
             println!("opened terminal in {} (PHP {php_version})", path.display());
+        }
+        Commands::VerifyPortable => {
+            init_sandbox(&app_root)?;
+            let report = verify_portable_layout(&app_root)?;
+            println!("portable OK: {}", report.app_root);
+            for note in report.notes {
+                println!("- {note}");
+            }
         }
         Commands::Status => {
             let orch = ProcessOrchestrator::new(&app_root);

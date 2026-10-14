@@ -7,6 +7,10 @@ const lanEl = document.getElementById("lan");
 const rootEl = document.getElementById("root");
 const progressEl = document.getElementById("progress");
 const phpSelect = document.getElementById("php-version");
+const logsEl = document.getElementById("logs");
+const dnsHintEl = document.getElementById("dns-hint");
+const mobileLink = document.getElementById("mobile-link");
+const rootCaLink = document.getElementById("root-ca-link");
 
 function lampClass(status) {
   if (!status) return "bad";
@@ -29,6 +33,15 @@ async function refreshInfo() {
   const info = await invoke("get_app_info");
   lanEl.textContent = `LAN ${info.lan_ip}`;
   rootEl.textContent = `Sandbox: ${info.app_root}`;
+  dnsHintEl.textContent = info.dns_hint || "";
+  if (info.mobile_url) {
+    mobileLink.href = info.mobile_url;
+    mobileLink.textContent = info.mobile_url;
+  }
+  if (info.root_ca_url) {
+    rootCaLink.href = info.root_ca_url;
+    rootCaLink.textContent = info.root_ca_url;
+  }
   if (info.settings?.active_php_version) {
     phpSelect.value = info.settings.active_php_version;
   }
@@ -51,6 +64,10 @@ async function refreshStatuses() {
   }
 }
 
+async function refreshLogs() {
+  logsEl.textContent = await invoke("read_recent_logs", { lines: 120 });
+}
+
 document.getElementById("btn-start").onclick = async () => {
   progressEl.textContent = "Starting…";
   try {
@@ -60,6 +77,7 @@ document.getElementById("btn-start").onclick = async () => {
     progressEl.textContent = String(err);
   }
   await refreshStatuses();
+  await refreshLogs();
 };
 
 document.getElementById("btn-stop").onclick = async () => {
@@ -115,6 +133,36 @@ document.getElementById("btn-open-term").onclick = async () => {
   }
 };
 
+document.getElementById("btn-refresh-logs").onclick = refreshLogs;
+
+async function install(component) {
+  progressEl.textContent = `Installing ${component}…`;
+  try {
+    await invoke("install_manifest_component", {
+      component,
+      phpVersion: phpSelect.value,
+    });
+    progressEl.textContent = `${component} installed.`;
+  } catch (err) {
+    progressEl.textContent = String(err);
+  }
+}
+
+document.getElementById("btn-install-nginx").onclick = () => install("nginx");
+document.getElementById("btn-install-php").onclick = () => install("php");
+document.getElementById("btn-install-mariadb").onclick = () => install("mariadb");
+
+document.getElementById("btn-verify").onclick = async () => {
+  try {
+    const report = await invoke("verify_portable");
+    progressEl.textContent = report.ok
+      ? `Portable OK: ${report.app_root}`
+      : `Missing: ${(report.missing_dirs || []).join(", ")}`;
+  } catch (err) {
+    progressEl.textContent = String(err);
+  }
+};
+
 listen("download-progress", (event) => {
   const p = event.payload;
   progressEl.textContent = `${p.component}: ${p.percentage.toFixed(1)}%`;
@@ -124,9 +172,12 @@ listen("services-changed", async () => {
   await refreshStatuses();
 });
 
-refreshInfo().then(refreshStatuses).catch((err) => {
-  progressEl.textContent = String(err);
-});
+refreshInfo()
+  .then(refreshStatuses)
+  .then(refreshLogs)
+  .catch((err) => {
+    progressEl.textContent = String(err);
+  });
 setInterval(() => {
   refreshStatuses().catch(() => {});
 }, 2500);
