@@ -30,6 +30,15 @@ pub struct ComponentSpec {
     pub archive: String,
     #[serde(default)]
     pub note: Option<String>,
+    /// Post-extract layout normalizer: nginx_binary | static_php | mariadb4j | ...
+    #[serde(default)]
+    pub layout: Option<String>,
+    /// Destination filename when archive == "binary"
+    #[serde(default)]
+    pub binary_name: Option<String>,
+    /// Additional archives to merge into the same target_dir (e.g. php-cli + php-fpm)
+    #[serde(default)]
+    pub extra_urls: Vec<String>,
 }
 
 fn default_archive() -> String {
@@ -266,11 +275,28 @@ impl BinaryManager {
         target_rel_dir: &str,
         strip_root_folder: bool,
         archive_kind: &str,
-        on_progress: F,
+        binary_name: Option<&str>,
+        mut on_progress: F,
     ) -> Result<()>
     where
         F: FnMut(DownloadProgress),
     {
+        let target_dir = self.app_root.join(target_rel_dir);
+        fs::create_dir_all(&target_dir)?;
+
+        if archive_kind == "binary" {
+            let dest_name = binary_name.unwrap_or(component_name);
+            let dest = target_dir.join(dest_name);
+            self.download_file(download_url, &dest, component_name, &mut on_progress)
+                .await?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&dest, fs::Permissions::from_mode(0o755))?;
+            }
+            return Ok(());
+        }
+
         let ext = if archive_kind == "tar_gz" {
             "tar.gz"
         } else {
@@ -280,9 +306,8 @@ impl BinaryManager {
             .app_root
             .join("temp")
             .join(format!("{component_name}.{ext}"));
-        let target_dir = self.app_root.join(target_rel_dir);
 
-        self.download_file(download_url, &temp_archive, component_name, on_progress)
+        self.download_file(download_url, &temp_archive, component_name, &mut on_progress)
             .await?;
 
         let zip_clone = temp_archive.clone();
@@ -301,7 +326,12 @@ impl BinaryManager {
         Ok(())
     }
 
-    pub async fn install_from_spec<F>(&self, name: &str, spec: &ComponentSpec, on_progress: F) -> Result<()>
+    pub async fn install_from_spec<F>(
+        &self,
+        name: &str,
+        spec: &ComponentSpec,
+        mut on_progress: F,
+    ) -> Result<()>
     where
         F: FnMut(DownloadProgress),
     {
@@ -319,9 +349,102 @@ impl BinaryManager {
             &spec.target_dir,
             spec.strip_root,
             &spec.archive,
-            on_progress,
+            spec.binary_name.as_deref(),
+            &mut on_progress,
         )
-        .await
+        .await?;
+
+        for (idx, extra) in spec.extra_urls.iter().enumerate() {
+            let label = format!("{name}-extra-{idx}");
+            self.install_component(
+                &label,
+                extra,
+                &spec.target_dir,
+                spec.strip_root,
+                &spec.archive,
+                None,
+                &mut on_progress,
+            )
+            .await?;
+        }
+
+        self.normalize_layout(spec)?;
+        Ok(())
+    }
+
+    fn normalize_layout(&self, spec: &ComponentSpec) -> Result<()> {
+        let target = self.app_root.join(&spec.target_dir);
+        match spec.layout.as_deref() {
+            Some("nginx_binary") => {
+                seed_nginx_support_files(&target)?;
+            }
+            Some("static_php") => {
+                // static-php drops bare `php` / `php-fpm` in the version dir.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    for name in ["php", "php-fpm"] {
+                        let p = target.join(name);
+                        if p.exists() {
+                            fs::set_permissions(&p, fs::Permissions::from_mode(0o755))?;
+                        }
+                    }
+                }
+            }
+            Some("mariadb4j") => {
+                normalize_mariadb4j_layout(&target)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Missing runtime binaries with actionable install hints.
+    pub fn missing_runtime_binaries(&self, php_version: &str) -> Vec<String> {
+        let mut missing = Vec::new();
+        let nginx = self.app_root.join(if cfg!(target_os = "windows") {
+            "bin/nginx/nginx.exe"
+        } else {
+            "bin/nginx/nginx"
+        });
+        if !nginx.exists() {
+            missing.push("nginx — click Install → Nginx".into());
+        }
+
+        let php_ok = [
+            self.app_root
+                .join("bin/php")
+                .join(php_version)
+                .join("sbin/php-fpm"),
+            self.app_root
+                .join("bin/php")
+                .join(php_version)
+                .join("php-fpm"),
+            self.app_root
+                .join("bin/php")
+                .join(php_version)
+                .join("php-cgi.exe"),
+        ]
+        .iter()
+        .any(|p| p.exists());
+        if !php_ok {
+            missing.push(format!(
+                "PHP {php_version} — click Install → PHP"
+            ));
+        }
+
+        let mysql_ok = [
+            self.app_root.join("bin/mysql/bin/mysqld"),
+            self.app_root.join("bin/mysql/bin/mariadbd"),
+            self.app_root.join("bin/mysql/bin/mysqld.exe"),
+        ]
+        .iter()
+        .any(|p| p.exists());
+        if !mysql_ok {
+            missing.push("MariaDB — click Install → MariaDB".into());
+        }
+
+        missing
     }
 
     /// Initialize MySQL/MariaDB system tables when `data/mysql/mysql` is missing.
@@ -369,17 +492,12 @@ impl BinaryManager {
             }
             c
         } else {
-            let mysqld_bin = if cfg!(target_os = "windows") {
-                mysql_bin_dir.join("mysqld.exe")
-            } else {
-                mysql_bin_dir.join("mysqld")
-            };
-            if !mysqld_bin.exists() {
-                bail!(
+            let mysqld_bin = find_mysqld_binary(&mysql_bin_dir).ok_or_else(|| {
+                anyhow::anyhow!(
                     "MySQL/MariaDB binaries not found under {:?}. Install them first.",
                     mysql_bin_dir
-                );
-            }
+                )
+            })?;
             let mut c = Command::new(mysqld_bin);
             c.arg(format!("--defaults-file={my_cnf}"))
                 .arg("--initialize-insecure")
@@ -457,4 +575,126 @@ pub fn print_progress(p: DownloadProgress) {
         );
     }
     let _ = io::Write::flush(&mut io::stderr());
+}
+
+fn find_mysqld_binary(bin_dir: &Path) -> Option<PathBuf> {
+    [
+        bin_dir.join("mysqld.exe"),
+        bin_dir.join("mariadbd.exe"),
+        bin_dir.join("mysqld"),
+        bin_dir.join("mariadbd"),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
+}
+
+fn seed_nginx_support_files(nginx_dir: &Path) -> Result<()> {
+    let conf = nginx_dir.join("conf");
+    fs::create_dir_all(&conf)?;
+    let mime = conf.join("mime.types");
+    if !mime.exists() {
+        fs::write(
+            &mime,
+            include_str!("../resources/nginx_mime.types"),
+        )?;
+    }
+    let fastcgi = conf.join("fastcgi_params");
+    if !fastcgi.exists() {
+        fs::write(
+            &fastcgi,
+            include_str!("../resources/nginx_fastcgi_params"),
+        )?;
+    }
+    fs::create_dir_all(nginx_dir.join("logs"))?;
+    fs::create_dir_all(nginx_dir.join("html"))?;
+    Ok(())
+}
+
+fn normalize_mariadb4j_layout(target: &Path) -> Result<()> {
+    // JAR extracts to ch/vorburger/mariadb4j/mariadb-*/osx/{bin,libs,scripts,share}
+    let osx = find_mariadb4j_osx_root(target)?;
+    let staging = target.join("_osx_staging");
+    if staging.exists() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    fs::rename(&osx, &staging)?;
+
+    // Drop leftover jar package tree
+    let ch = target.join("ch");
+    if ch.exists() {
+        let _ = fs::remove_dir_all(&ch);
+    }
+    let meta = target.join("META-INF");
+    if meta.exists() {
+        let _ = fs::remove_dir_all(&meta);
+    }
+
+    for entry in fs::read_dir(&staging)? {
+        let entry = entry?;
+        let dest = target.join(entry.file_name());
+        if dest.exists() {
+            if dest.is_dir() {
+                let _ = fs::remove_dir_all(&dest);
+            } else {
+                let _ = fs::remove_file(&dest);
+            }
+        }
+        fs::rename(entry.path(), &dest)?;
+    }
+    let _ = fs::remove_dir_all(&staging);
+
+    let bin = target.join("bin");
+    // Compatibility aliases expected by ProcessOrchestrator / mysqladmin shutdown.
+    #[cfg(unix)]
+    {
+        symlink_force(bin.join("mariadbd"), bin.join("mysqld"))?;
+        if bin.join("mariadb-admin").exists() {
+            symlink_force(bin.join("mariadb-admin"), bin.join("mysqladmin"))?;
+        } else if bin.join("mariadb").exists() {
+            // Best-effort: some packs only ship `mariadb` client.
+            symlink_force(bin.join("mariadb"), bin.join("mysqladmin"))?;
+        }
+        let script = target.join("scripts/mariadb-install-db");
+        if script.exists() {
+            let dest = bin.join("mariadb-install-db");
+            if !dest.exists() {
+                fs::copy(&script, &dest)?;
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&dest, fs::Permissions::from_mode(0o755))?;
+            }
+        }
+        for name in ["mariadbd", "mariadb", "mariadb-check", "mariadb-dump", "my_print_defaults"] {
+            let p = bin.join(name);
+            if p.exists() {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&p, fs::Permissions::from_mode(0o755))?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn find_mariadb4j_osx_root(target: &Path) -> Result<PathBuf> {
+    let root = target.join("ch/vorburger/mariadb4j");
+    if !root.exists() {
+        bail!("mariadb4j layout: missing {root:?}");
+    }
+    for ver in fs::read_dir(&root)? {
+        let ver = ver?;
+        let osx = ver.path().join("osx");
+        if osx.is_dir() {
+            return Ok(osx);
+        }
+    }
+    bail!("mariadb4j layout: no osx/ directory under {root:?}");
+}
+
+#[cfg(unix)]
+fn symlink_force(original: PathBuf, link: PathBuf) -> Result<()> {
+    if link.exists() || link.symlink_metadata().is_ok() {
+        let _ = fs::remove_file(&link);
+    }
+    std::os::unix::fs::symlink(original, link)?;
+    Ok(())
 }

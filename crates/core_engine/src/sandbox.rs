@@ -29,6 +29,7 @@ pub const REQUIRED_DIRS: &[&str] = &[
 const BUNDLED_TEMPLATES: &[(&str, &str)] = &[
     ("nginx.conf.tera", include_str!("../templates/nginx.conf.tera")),
     ("php.ini.tera", include_str!("../templates/php.ini.tera")),
+    ("php-fpm.conf.tera", include_str!("../templates/php-fpm.conf.tera")),
     ("my.cnf.tera", include_str!("../templates/my.cnf.tera")),
     ("vhost.conf.tera", include_str!("../templates/vhost.conf.tera")),
 ];
@@ -61,6 +62,14 @@ pub fn init_sandbox(app_root: &Path) -> Result<()> {
     }
 
     seed_default_templates(app_root)?;
+    // Always refresh php-fpm template if we added it after an older sandbox seed.
+    let fpm_tpl = app_root.join("templates/php-fpm.conf.tera");
+    if !fpm_tpl.exists() {
+        fs::write(
+            &fpm_tpl,
+            include_str!("../templates/php-fpm.conf.tera"),
+        )?;
+    }
 
     let index = app_root.join("htdocs/index.php");
     if !index.exists() {

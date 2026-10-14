@@ -67,6 +67,7 @@ pub fn render_all_configs(app_root: &Path, config: &SandboxConfig) -> Result<()>
     let targets = [
         ("nginx.conf.tera", "conf/nginx.conf"),
         ("php.ini.tera", "conf/php.ini"),
+        ("php-fpm.conf.tera", "conf/php-fpm.conf"),
         ("my.cnf.tera", "conf/my.cnf"),
     ];
 

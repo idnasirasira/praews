@@ -102,11 +102,29 @@ impl ProcessOrchestrator {
             c.env("PHP_FCGI_MAX_REQUESTS", "0");
             c
         } else {
-            let bin = php_dir.join("sbin/php-fpm");
-            ensure_binary_exists(&bin)?;
+            let bin = find_php_fpm(&php_dir).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "php-fpm not found under {:?}. Install PHP first.",
+                    php_dir
+                )
+            })?;
+            let fpm_conf = self.app_root.join("conf/php-fpm.conf");
+            if !fpm_conf.exists() {
+                bail!(
+                    "missing {} — run render/config first so PHP-FPM knows listen=:{}",
+                    fpm_conf.display(),
+                    fastcgi_port
+                );
+            }
             let mut c = Command::new(bin);
-            // -F keeps php-fpm in the foreground so Tokio owns the lifecycle.
-            c.arg("-F").arg("-c").arg(path_for_config(&php_ini));
+            // -F foreground; -y fpm pool config (listen port); -c php.ini
+            c.arg("-F")
+                .arg("-O")
+                .arg("-y")
+                .arg(path_for_config(&fpm_conf))
+                .arg("-c")
+                .arg(path_for_config(&php_ini));
+            let _ = bind_addr; // listen address comes from php-fpm.conf
             c
         };
 
@@ -119,15 +137,14 @@ impl ProcessOrchestrator {
             bail!("MySQL port {mysql_port} is already in use");
         }
 
-        let bin_name = if cfg!(target_os = "windows") {
-            "mysqld.exe"
-        } else {
-            "mysqld"
-        };
-        let mysqld_bin = self.app_root.join("bin/mysql/bin").join(bin_name);
+        let mysql_bin_dir = self.app_root.join("bin/mysql/bin");
+        let mysqld_bin = find_mysqld(&mysql_bin_dir).ok_or_else(|| {
+            anyhow::anyhow!(
+                "mysqld/mariadbd not found under {:?}. Install MariaDB first.",
+                mysql_bin_dir
+            )
+        })?;
         let my_cnf = self.app_root.join("conf/my.cnf");
-
-        ensure_binary_exists(&mysqld_bin)?;
 
         let mut cmd = Command::new(&mysqld_bin);
         // `--defaults-file` MUST be the first argument for mysqld.
@@ -355,8 +372,29 @@ fn ensure_binary_exists(path: &Path) -> Result<()> {
         Ok(())
     } else {
         bail!(
-            "binary not found at {:?}. Download portable binaries into the sandbox bin/ folder first (Phase 3)",
+            "binary not found at {:?}. Use Install buttons (Nginx / PHP / MariaDB) first.",
             path
         )
     }
+}
+
+fn find_php_fpm(php_dir: &Path) -> Option<PathBuf> {
+    [
+        php_dir.join("sbin/php-fpm"),
+        php_dir.join("php-fpm"),
+        php_dir.join("bin/php-fpm"),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
+}
+
+fn find_mysqld(bin_dir: &Path) -> Option<PathBuf> {
+    [
+        bin_dir.join("mysqld.exe"),
+        bin_dir.join("mariadbd.exe"),
+        bin_dir.join("mysqld"),
+        bin_dir.join("mariadbd"),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
 }

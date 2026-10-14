@@ -72,12 +72,14 @@ document.getElementById("btn-start").onclick = async () => {
   progressEl.textContent = "Starting…";
   try {
     await invoke("start_all_services");
-    progressEl.textContent = "Services started (or attempted).";
+    progressEl.textContent = "Services started.";
   } catch (err) {
     progressEl.textContent = String(err);
   }
   await refreshStatuses();
   await refreshLogs();
+  // Keep logs panel scrolled to latest praews.log errors
+  logsEl.scrollTop = logsEl.scrollHeight;
 };
 
 document.getElementById("btn-stop").onclick = async () => {

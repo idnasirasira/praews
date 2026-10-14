@@ -124,8 +124,10 @@ async fn read_recent_logs(
     let n = lines.unwrap_or(80);
     let log_dir = state.app_root.join("logs");
     let candidates = [
+        "praews.log",
         "nginx_error.log",
         "php_error.log",
+        "php-fpm.log",
         "mysql_error.log",
         "nginx_process.log",
         "php_process.log",
@@ -199,16 +201,71 @@ async fn get_service_statuses(
     Ok(state.orchestrator.get_all_statuses().await)
 }
 
+fn append_praews_log(app_root: &Path, message: &str) {
+    let path = app_root.join("logs/praews.log");
+    let _ = fs::create_dir_all(app_root.join("logs"));
+    let line = format!(
+        "[{}] {}\n",
+        chrono_like_now(),
+        message
+    );
+    let _ = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(line.as_bytes())
+        });
+}
+
+fn chrono_like_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("unix:{secs}")
+}
+
 #[tauri::command]
 async fn start_all_services(state: State<'_, AppState>) -> Result<(), String> {
     let settings = state.settings.lock().await.clone();
+    let root = state.app_root.clone();
 
-    init_sandbox(&state.app_root).map_err(|e| e.to_string())?;
+    let fail = |msg: String| -> Result<(), String> {
+        append_praews_log(&root, &format!("ERROR: {msg}"));
+        Err(msg)
+    };
+
+    append_praews_log(&root, "Start All requested");
+
+    init_sandbox(&state.app_root).map_err(|e| {
+        let msg = e.to_string();
+        append_praews_log(&root, &format!("ERROR: {msg}"));
+        msg
+    })?;
+
+    let missing = state
+        .binary_manager
+        .missing_runtime_binaries(&settings.active_php_version);
+    if !missing.is_empty() {
+        let msg = format!(
+            "Binaries belum terpasang:\n- {}\nInstall dulu lewat tombol Nginx / PHP / MariaDB, baru Start All.",
+            missing.join("\n- ")
+        );
+        return fail(msg);
+    }
+
     state
         .binary_manager
         .ensure_cacert_bundle()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            let msg = e.to_string();
+            append_praews_log(&root, &format!("ERROR: {msg}"));
+            msg
+        })?;
 
     let config = SandboxConfig::new(&state.app_root, &settings.active_php_version)
         .with_ports(
@@ -217,32 +274,57 @@ async fn start_all_services(state: State<'_, AppState>) -> Result<(), String> {
             settings.mysql_port,
         )
         .with_https_port(settings.https_port);
-    render_all_configs(&state.app_root, &config).map_err(|e| e.to_string())?;
+    render_all_configs(&state.app_root, &config).map_err(|e| {
+        let msg = e.to_string();
+        append_praews_log(&root, &format!("ERROR: {msg}"));
+        msg
+    })?;
 
     state
         .binary_manager
         .initialize_mysql_datadir()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            let msg = format!("MySQL init: {e}");
+            append_praews_log(&root, &format!("ERROR: {msg}"));
+            msg
+        })?;
 
     state
         .orchestrator
         .start_mysql(settings.mysql_port)
         .await
-        .map_err(|e| format!("MySQL: {e}"))?;
+        .map_err(|e| {
+            let msg = format!("MySQL: {e}");
+            append_praews_log(&root, &format!("ERROR: {msg}"));
+            msg
+        })?;
     state
         .orchestrator
         .start_php(&settings.active_php_version, settings.php_fastcgi_port)
         .await
-        .map_err(|e| format!("PHP: {e}"))?;
+        .map_err(|e| {
+            let msg = format!("PHP: {e}");
+            append_praews_log(&root, &format!("ERROR: {msg}"));
+            msg
+        })?;
     state
         .orchestrator
         .start_nginx(settings.http_port)
         .await
-        .map_err(|e| format!("Nginx: {e}"))?;
+        .map_err(|e| {
+            let msg = format!("Nginx: {e}");
+            append_praews_log(&root, &format!("ERROR: {msg}"));
+            msg
+        })?;
 
     let mut dns = state.dns_server.lock().await;
-    let _ = dns.start().await;
+    match dns.start().await {
+        Ok(()) => append_praews_log(&root, "DNS started"),
+        Err(e) => append_praews_log(&root, &format!("DNS warning: {e}")),
+    }
+
+    append_praews_log(&root, "Start All completed");
     Ok(())
 }
 
@@ -325,6 +407,7 @@ async fn download_and_install_binary(
             &target_rel_dir,
             strip_root_folder,
             &kind,
+            None,
             move |progress| {
                 let _ = app_clone.emit("download-progress", progress);
             },

@@ -5,14 +5,16 @@
       "url": "https://nginx.org/download/nginx-1.26.2.zip",
       "target_dir": "bin/nginx",
       "strip_root": true,
-      "archive": "zip"
+      "archive": "zip",
+      "layout": "nginx_tree"
     },
     "mariadb": {
       "version": "11.4.3",
       "url": "https://archive.mariadb.org/mariadb-11.4.3/winx64-packages/mariadb-11.4.3-winx64.zip",
       "target_dir": "bin/mysql",
       "strip_root": true,
-      "archive": "zip"
+      "archive": "zip",
+      "layout": "mysql_tree"
     },
     "php": {
       "8.3": {
@@ -20,68 +22,80 @@
         "url": "https://windows.php.net/downloads/releases/archives/php-8.3.12-nts-Win32-vs16-x64.zip",
         "target_dir": "bin/php/8.3",
         "strip_root": false,
-        "archive": "zip"
+        "archive": "zip",
+        "layout": "php_windows"
       },
       "8.4": {
         "version": "8.4.1",
         "url": "https://windows.php.net/downloads/releases/archives/php-8.4.1-nts-Win32-vs17-x64.zip",
         "target_dir": "bin/php/8.4",
         "strip_root": false,
-        "archive": "zip"
+        "archive": "zip",
+        "layout": "php_windows"
       }
     }
   },
   "macos_aarch64": {
     "nginx": {
-      "version": "1.26.2",
-      "url": "https://nginx.org/download/nginx-1.26.2.tar.gz",
+      "version": "1.31.6",
+      "url": "https://raw.githubusercontent.com/jirutka/nginx-binaries/binaries/nginx-1.31.6-arm64-darwin",
       "target_dir": "bin/nginx",
-      "strip_root": true,
-      "archive": "tar_gz",
-      "note": "Source tarball — place a prebuilt nginx binary under bin/nginx/ or compile; auto-build is not implemented yet."
+      "strip_root": false,
+      "archive": "binary",
+      "binary_name": "nginx",
+      "layout": "nginx_binary"
     },
     "mariadb": {
-      "version": "11.4.3",
-      "url": null,
+      "version": "11.4.5",
+      "url": "https://repo1.maven.org/maven2/ch/vorburger/mariaDB4j/mariaDB4j-db-macos-arm64/11.4.5/mariaDB4j-db-macos-arm64-11.4.5.jar",
       "target_dir": "bin/mysql",
-      "strip_root": true,
-      "archive": "tar_gz",
-      "note": "Provide a portable MariaDB macOS arm64 archive URL in this manifest."
+      "strip_root": false,
+      "archive": "zip",
+      "layout": "mariadb4j"
     },
     "php": {
       "8.3": {
         "version": "8.3.12",
-        "url": null,
+        "url": "https://dl.static-php.dev/static-php-cli/bulk/php-8.3.12-fpm-macos-aarch64.tar.gz",
         "target_dir": "bin/php/8.3",
-        "strip_root": true,
+        "strip_root": false,
         "archive": "tar_gz",
-        "note": "Provide a portable PHP 8.3 macOS arm64 archive URL (php-fpm + modules)."
+        "layout": "static_php",
+        "extra_urls": [
+          "https://dl.static-php.dev/static-php-cli/bulk/php-8.3.12-cli-macos-aarch64.tar.gz"
+        ]
       }
     }
   },
   "macos_x86_64": {
     "nginx": {
-      "version": "1.26.2",
-      "url": "https://nginx.org/download/nginx-1.26.2.tar.gz",
+      "version": "1.31.6",
+      "url": "https://raw.githubusercontent.com/jirutka/nginx-binaries/binaries/nginx-1.31.6-x86_64-darwin",
       "target_dir": "bin/nginx",
-      "strip_root": true,
-      "archive": "tar_gz",
-      "note": "Source tarball — place a prebuilt nginx binary under bin/nginx/ or compile."
+      "strip_root": false,
+      "archive": "binary",
+      "binary_name": "nginx",
+      "layout": "nginx_binary"
     },
     "mariadb": {
-      "version": "11.4.3",
+      "version": "11.4.5",
       "url": null,
       "target_dir": "bin/mysql",
       "strip_root": true,
-      "archive": "tar_gz"
+      "archive": "tar_gz",
+      "note": "No MariaDB4j Intel macOS package yet — use Apple Silicon or provide a portable archive URL."
     },
     "php": {
       "8.3": {
         "version": "8.3.12",
-        "url": null,
+        "url": "https://dl.static-php.dev/static-php-cli/bulk/php-8.3.12-fpm-macos-x86_64.tar.gz",
         "target_dir": "bin/php/8.3",
-        "strip_root": true,
-        "archive": "tar_gz"
+        "strip_root": false,
+        "archive": "tar_gz",
+        "layout": "static_php",
+        "extra_urls": [
+          "https://dl.static-php.dev/static-php-cli/bulk/php-8.3.12-cli-macos-x86_64.tar.gz"
+        ]
       }
     }
   }
