@@ -6,8 +6,14 @@
 
 # Portable sandbox runtime (generated locally)
 /sandbox/
+/dev_sandbox/
 /workspace/
 **/state.json
+
+# Tauri / Node
+node_modules/
+dist/
+crates/gui/gen/
 
 # IDE
 .idea/

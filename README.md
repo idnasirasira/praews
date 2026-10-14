@@ -7,7 +7,7 @@ Portable local web server environment (Nginx + PHP + MariaDB) built with Rust â€
 | Crate | Role |
 |-------|------|
 | `crates/core_engine` | Library + `praews` CLI: sandbox init, Tera config engine, process orchestrator |
-| `crates/gui` | Placeholder for Tauri v2 (Phase 5) |
+| `crates/gui` | Tauri v2 dashboard + system tray |
 
 ## Quick start
 
@@ -32,6 +32,9 @@ cargo run -p core_engine -- --root ./sandbox dns
 
 # Install portable binaries (Windows URLs ready in manifest; macOS needs archive URLs)
 cargo run -p core_engine -- --root ./sandbox install nginx
+
+# GUI (Tauri) â€” uses ./dev_sandbox in debug builds
+cargo run -p gui
 ```
 
 ## Principles

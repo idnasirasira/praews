@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>praews</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div>
+        <p class="brand">praews</p>
+        <p class="sub" id="lan">LAN —</p>
+      </div>
+      <div class="actions">
+        <button id="btn-start" class="primary">Start All</button>
+        <button id="btn-stop">Stop All</button>
+      </div>
+    </header>
+
+    <main>
+      <section>
+        <h2>Services</h2>
+        <ul id="services" class="status-list"></ul>
+      </section>
+
+      <section>
+        <h2>PHP version</h2>
+        <div class="row">
+          <select id="php-version">
+            <option value="8.2">8.2</option>
+            <option value="8.3" selected>8.3</option>
+            <option value="8.4">8.4</option>
+          </select>
+          <button id="btn-switch-php">Switch</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Sites</h2>
+        <ul id="sites" class="sites"></ul>
+        <div class="row">
+          <input id="site-domain" placeholder="myapp.test" />
+          <input id="site-path" placeholder="/absolute/path/to/project" />
+          <button id="btn-add-site">Add site</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Tools</h2>
+        <div class="row">
+          <button id="btn-trust-ca">Trust Root CA</button>
+          <button id="btn-open-term">Open Terminal</button>
+        </div>
+        <p class="hint" id="root">Sandbox: —</p>
+        <p class="hint" id="progress"></p>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

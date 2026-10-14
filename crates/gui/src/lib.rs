@@ -1,0 +1,442 @@
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Emitter, Manager, RunEvent, State, WindowEvent,
+};
+use tokio::sync::Mutex;
+
+use core_engine::{
+    add_site, get_local_lan_ip, init_sandbox, render_all_configs, BinaryManager, CliEnvManager,
+    LocalDnsServer, ProcessOrchestrator, SandboxConfig, ServiceStatus, ServiceType, SslManager,
+};
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct VHostEntry {
+    pub domain: String,
+    pub project_path: String,
+    pub public_path: String,
+    pub ssl_enabled: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct PersistentSettings {
+    pub active_php_version: String,
+    pub http_port: u16,
+    pub https_port: u16,
+    pub mysql_port: u16,
+    pub php_fastcgi_port: u16,
+    pub dns_port: u16,
+    pub vhosts: Vec<VHostEntry>,
+}
+
+impl Default for PersistentSettings {
+    fn default() -> Self {
+        Self {
+            active_php_version: "8.3".to_string(),
+            http_port: 8888,
+            https_port: 8443,
+            mysql_port: 3306,
+            php_fastcgi_port: 9000,
+            dns_port: if cfg!(target_os = "macos") { 53535 } else { 53 },
+            vhosts: Vec::new(),
+        }
+    }
+}
+
+impl PersistentSettings {
+    pub fn load(app_root: &Path) -> Self {
+        let state_file = app_root.join("state.json");
+        if let Ok(content) = fs::read_to_string(&state_file) {
+            if let Ok(parsed) = serde_json::from_str::<Self>(&content) {
+                return parsed;
+            }
+        }
+        let default_settings = Self::default();
+        let _ = default_settings.save(app_root);
+        default_settings
+    }
+
+    pub fn save(&self, app_root: &Path) -> Result<(), String> {
+        let state_file = app_root.join("state.json");
+        let content = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        fs::write(state_file, content).map_err(|e| e.to_string())
+    }
+}
+
+pub struct AppState {
+    pub app_root: PathBuf,
+    pub settings: Mutex<PersistentSettings>,
+    pub orchestrator: Arc<ProcessOrchestrator>,
+    pub dns_server: Mutex<LocalDnsServer>,
+    pub binary_manager: Arc<BinaryManager>,
+    pub ssl_manager: Arc<SslManager>,
+    pub cli_env: Arc<CliEnvManager>,
+}
+
+fn resolve_portable_app_root() -> PathBuf {
+    if cfg!(debug_assertions) {
+        let dev_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("dev_sandbox");
+        let _ = fs::create_dir_all(&dev_dir);
+        fs::canonicalize(&dev_dir).unwrap_or(dev_dir)
+    } else {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+}
+
+#[tauri::command]
+async fn get_app_info(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let settings = state.settings.lock().await.clone();
+    let lan_ip = get_local_lan_ip().to_string();
+    Ok(serde_json::json!({
+        "app_root": state.app_root.to_string_lossy(),
+        "lan_ip": lan_ip,
+        "settings": settings,
+    }))
+}
+
+#[tauri::command]
+async fn get_service_statuses(
+    state: State<'_, AppState>,
+) -> Result<HashMap<ServiceType, ServiceStatus>, String> {
+    Ok(state.orchestrator.get_all_statuses().await)
+}
+
+#[tauri::command]
+async fn start_all_services(state: State<'_, AppState>) -> Result<(), String> {
+    let settings = state.settings.lock().await.clone();
+
+    init_sandbox(&state.app_root).map_err(|e| e.to_string())?;
+    state
+        .binary_manager
+        .ensure_cacert_bundle()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let config = SandboxConfig::new(&state.app_root, &settings.active_php_version)
+        .with_ports(
+            settings.http_port,
+            settings.php_fastcgi_port,
+            settings.mysql_port,
+        )
+        .with_https_port(settings.https_port);
+    render_all_configs(&state.app_root, &config).map_err(|e| e.to_string())?;
+
+    state
+        .binary_manager
+        .initialize_mysql_datadir()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    state
+        .orchestrator
+        .start_mysql(settings.mysql_port)
+        .await
+        .map_err(|e| format!("MySQL: {e}"))?;
+    state
+        .orchestrator
+        .start_php(&settings.active_php_version, settings.php_fastcgi_port)
+        .await
+        .map_err(|e| format!("PHP: {e}"))?;
+    state
+        .orchestrator
+        .start_nginx(settings.http_port)
+        .await
+        .map_err(|e| format!("Nginx: {e}"))?;
+
+    let mut dns = state.dns_server.lock().await;
+    let _ = dns.start().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_all_services(state: State<'_, AppState>) -> Result<(), String> {
+    {
+        let mut dns = state.dns_server.lock().await;
+        dns.stop();
+    }
+    state
+        .orchestrator
+        .stop_all()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn switch_php_version(version: String, state: State<'_, AppState>) -> Result<(), String> {
+    let php_dir = state.app_root.join("bin/php").join(&version);
+    if !php_dir.exists() {
+        return Err(format!(
+            "PHP {version} is not installed under bin/php/{version}"
+        ));
+    }
+
+    let (http_port, php_port, mysql_port, https_port) = {
+        let mut settings = state.settings.lock().await;
+        settings.active_php_version = version.clone();
+        settings.save(&state.app_root)?;
+        (
+            settings.http_port,
+            settings.php_fastcgi_port,
+            settings.mysql_port,
+            settings.https_port,
+        )
+    };
+
+    let config = SandboxConfig::new(&state.app_root, &version)
+        .with_ports(http_port, php_port, mysql_port)
+        .with_https_port(https_port);
+    render_all_configs(&state.app_root, &config).map_err(|e| e.to_string())?;
+
+    let statuses = state.orchestrator.get_all_statuses().await;
+    if matches!(
+        statuses.get(&ServiceType::Php),
+        Some(ServiceStatus::Running { .. })
+    ) {
+        state
+            .orchestrator
+            .stop_service(ServiceType::Php)
+            .await
+            .map_err(|e| e.to_string())?;
+        state
+            .orchestrator
+            .start_php(&version, php_port)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn download_and_install_binary(
+    app_handle: AppHandle,
+    component_name: String,
+    download_url: String,
+    target_rel_dir: String,
+    strip_root_folder: bool,
+    archive_kind: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let app_clone = app_handle.clone();
+    let kind = archive_kind.unwrap_or_else(|| "zip".into());
+    state
+        .binary_manager
+        .install_component(
+            &component_name,
+            &download_url,
+            &target_rel_dir,
+            strip_root_folder,
+            &kind,
+            move |progress| {
+                let _ = app_clone.emit("download-progress", progress);
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn create_virtual_host(
+    domain: String,
+    project_path: String,
+    state: State<'_, AppState>,
+) -> Result<VHostEntry, String> {
+    let settings = state.settings.lock().await.clone();
+    let site = add_site(
+        &state.app_root,
+        &domain,
+        Path::new(&project_path),
+        settings.http_port,
+        settings.https_port,
+        settings.php_fastcgi_port,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let entry = VHostEntry {
+        domain: site.domain.clone(),
+        project_path: site.project_path.to_string_lossy().into_owned(),
+        public_path: site.public_path.to_string_lossy().into_owned(),
+        ssl_enabled: true,
+    };
+
+    {
+        let mut settings_mut = state.settings.lock().await;
+        settings_mut.vhosts.retain(|v| v.domain != domain);
+        settings_mut.vhosts.push(entry.clone());
+        settings_mut.save(&state.app_root)?;
+    }
+
+    let statuses = state.orchestrator.get_all_statuses().await;
+    if matches!(
+        statuses.get(&ServiceType::Nginx),
+        Some(ServiceStatus::Running { .. })
+    ) {
+        let _ = state.orchestrator.stop_service(ServiceType::Nginx).await;
+        let _ = state.orchestrator.start_nginx(settings.http_port).await;
+    }
+
+    Ok(entry)
+}
+
+#[tauri::command]
+async fn trust_local_root_ca(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .ssl_manager
+        .trust_root_ca_in_os()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn open_project_terminal(
+    project_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let active_php = state.settings.lock().await.active_php_version.clone();
+    state
+        .cli_env
+        .open_project_terminal(Path::new(&project_path), &active_php)
+        .map_err(|e| e.to_string())
+}
+
+fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let show_item = MenuItem::with_id(app, "show", "Show Dashboard", true, None::<&str>)?;
+    let start_all = MenuItem::with_id(app, "start_all", "Start All Services", true, None::<&str>)?;
+    let stop_all = MenuItem::with_id(app, "stop_all", "Stop All Services", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit & Stop Servers", true, None::<&str>)?;
+    let tray_menu = Menu::with_items(
+        app,
+        &[
+            &show_item,
+            &separator,
+            &start_all,
+            &stop_all,
+            &separator,
+            &quit_item,
+        ],
+    )?;
+
+    let _tray = TrayIconBuilder::new()
+        .icon(app.default_window_icon().unwrap().clone())
+        .menu(&tray_menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app_handle, event| match event.id.as_ref() {
+            "show" => {
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            "start_all" => {
+                let handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = handle.state::<AppState>();
+                    let _ = start_all_services(state).await;
+                    let _ = handle.emit("services-changed", ());
+                });
+            }
+            "stop_all" => {
+                let handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = handle.state::<AppState>();
+                    let _ = stop_all_services(state).await;
+                    let _ = handle.emit("services-changed", ());
+                });
+            }
+            "quit" => {
+                app_handle.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app_handle = tray.app_handle();
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("info".parse().unwrap()),
+        )
+        .init();
+
+    let app_root = resolve_portable_app_root();
+    let _ = init_sandbox(&app_root);
+    let initial_settings = PersistentSettings::load(&app_root);
+    let dns_port = initial_settings.dns_port;
+
+    let binary_manager = BinaryManager::new(&app_root).expect("binary manager");
+    let app_state = AppState {
+        app_root: app_root.clone(),
+        settings: Mutex::new(initial_settings),
+        orchestrator: Arc::new(ProcessOrchestrator::new(&app_root)),
+        dns_server: Mutex::new(LocalDnsServer::new(dns_port)),
+        binary_manager: Arc::new(binary_manager),
+        ssl_manager: Arc::new(SslManager::new(&app_root)),
+        cli_env: Arc::new(CliEnvManager::new(&app_root)),
+    };
+
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .manage(app_state)
+        .setup(|app| {
+            setup_system_tray(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_app_info,
+            get_service_statuses,
+            start_all_services,
+            stop_all_services,
+            switch_php_version,
+            download_and_install_binary,
+            create_virtual_host,
+            trust_local_root_ca,
+            open_project_terminal,
+        ])
+        .build(tauri::generate_context!())
+        .expect("failed to build Tauri app");
+
+    app.run(|app_handle, event| {
+        if let RunEvent::Exit = event {
+            let state = app_handle.state::<AppState>();
+            let orchestrator = state.orchestrator.clone();
+            tauri::async_runtime::block_on(async move {
+                let _ = orchestrator.stop_all().await;
+            });
+        }
+    });
+}
