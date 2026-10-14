@@ -9,7 +9,7 @@ Portable local web server environment (Nginx + PHP + MariaDB) built with Rust â€
 | `crates/core_engine` | Library + `praews` CLI: sandbox init, Tera config engine, process orchestrator |
 | `crates/gui` | Placeholder for Tauri v2 (Phase 5) |
 
-## Quick start (Phase 1)
+## Quick start
 
 ```bash
 cargo build -p core_engine
@@ -20,11 +20,19 @@ cargo run -p core_engine -- --root ./sandbox init
 # Render nginx.conf / php.ini / my.cnf with absolute portable paths
 cargo run -p core_engine -- --root ./sandbox render --php-version 8.3
 
-# Check ports
-cargo run -p core_engine -- ports
-```
+# CA bundle + local Root CA for *.test HTTPS
+cargo run -p core_engine -- --root ./sandbox ensure-cacert
+cargo run -p core_engine -- --root ./sandbox ensure-ca
 
-Starting services requires portable binaries under `sandbox/bin/` (Phase 3 downloader).
+# Add a virtual host
+cargo run -p core_engine -- --root ./sandbox add-site myapp.test --path ./sandbox/htdocs
+
+# Local DNS for *.test (port 53535; pair with macOS /etc/resolver/test if desired)
+cargo run -p core_engine -- --root ./sandbox dns
+
+# Install portable binaries (Windows URLs ready in manifest; macOS needs archive URLs)
+cargo run -p core_engine -- --root ./sandbox install nginx
+```
 
 ## Principles
 

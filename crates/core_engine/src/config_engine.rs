@@ -9,6 +9,7 @@ use tera::{Context as TeraContext, Tera};
 pub struct SandboxConfig {
     pub app_root: String,
     pub http_port: u16,
+    pub https_port: u16,
     pub php_fastcgi_port: u16,
     pub mysql_port: u16,
     pub php_version: String,
@@ -32,6 +33,7 @@ impl SandboxConfig {
         Self {
             app_root: normalize_path(&absolute),
             http_port: 8888,
+            https_port: 8443,
             php_fastcgi_port: 9000,
             mysql_port: 3306,
             php_version: php_version.to_string(),
@@ -44,6 +46,11 @@ impl SandboxConfig {
         self.http_port = http;
         self.php_fastcgi_port = php_fastcgi;
         self.mysql_port = mysql;
+        self
+    }
+
+    pub fn with_https_port(mut self, https: u16) -> Self {
+        self.https_port = https;
         self
     }
 }
@@ -84,6 +91,7 @@ pub fn render_all_configs(app_root: &Path, config: &SandboxConfig) -> Result<()>
 pub struct VhostConfig {
     pub app_root: String,
     pub http_port: u16,
+    pub https_port: u16,
     pub php_fastcgi_port: u16,
     pub domain: String,
     pub project_public_path: String,

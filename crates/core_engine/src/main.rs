@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use core_engine::{
-    init_sandbox, render_all_configs, resolve_app_root, ProcessOrchestrator, SandboxConfig,
-    ServiceType,
+    add_site, init_sandbox, render_all_configs, resolve_app_root, BinaryManager, LocalDnsServer,
+    ProcessOrchestrator, SandboxConfig, ServiceType, SslManager,
 };
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
@@ -29,6 +29,8 @@ enum Commands {
         php_version: String,
         #[arg(long, default_value_t = 8888)]
         http_port: u16,
+        #[arg(long, default_value_t = 8443)]
+        https_port: u16,
         #[arg(long, default_value_t = 9000)]
         php_port: u16,
         #[arg(long, default_value_t = 3306)]
@@ -45,7 +47,43 @@ enum Commands {
         mysql_port: u16,
     },
 
-    /// Show tracked service statuses (requires prior start in this process)
+    /// Download CA bundle into conf/ssl/cacert.pem
+    EnsureCacert,
+
+    /// Create local Root CA under conf/ssl/
+    EnsureCa,
+
+    /// Download & extract a component from the bundled platform manifest
+    Install {
+        #[arg(value_enum)]
+        component: InstallComponent,
+        #[arg(long, default_value = "8.3")]
+        php_version: String,
+    },
+
+    /// Initialize MySQL/MariaDB system tables (no-op if already done)
+    InitDb,
+
+    /// Add a virtual host (.test) for a project folder
+    AddSite {
+        domain: String,
+        #[arg(long)]
+        path: PathBuf,
+        #[arg(long, default_value_t = 8888)]
+        http_port: u16,
+        #[arg(long, default_value_t = 8443)]
+        https_port: u16,
+        #[arg(long, default_value_t = 9000)]
+        php_port: u16,
+    },
+
+    /// Start local DNS resolver for *.test (default port 53535)
+    Dns {
+        #[arg(long, default_value_t = 53535)]
+        port: u16,
+    },
+
+    /// Show tracked service statuses
     Status,
 
     /// Start a service (requires portable binaries under bin/)
@@ -79,12 +117,32 @@ enum CliService {
     Mysql,
 }
 
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum InstallComponent {
+    Nginx,
+    Php,
+    Mariadb,
+}
+
 impl From<CliService> for ServiceType {
     fn from(value: CliService) -> Self {
         match value {
             CliService::Nginx => ServiceType::Nginx,
             CliService::Php => ServiceType::Php,
             CliService::Mysql => ServiceType::MySql,
+        }
+    }
+}
+
+fn resolve_root(cli_root: Option<PathBuf>) -> Result<PathBuf> {
+    match cli_root {
+        Some(path) => Ok(path),
+        None => {
+            if std::env::var_os("PRAEWS_ROOT").is_some() {
+                resolve_app_root()
+            } else {
+                std::env::current_dir().context("cwd")
+            }
         }
     }
 }
@@ -96,17 +154,7 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let app_root = match cli.root {
-        Some(path) => path,
-        None => {
-            // Prefer cwd for CLI testing so we don't write next to cargo target/
-            if std::env::var_os("PRAEWS_ROOT").is_some() {
-                resolve_app_root()?
-            } else {
-                std::env::current_dir().context("cwd")?
-            }
-        }
-    };
+    let app_root = resolve_root(cli.root)?;
 
     match cli.command {
         Commands::Init => {
@@ -116,11 +164,13 @@ async fn main() -> Result<()> {
         Commands::Render {
             php_version,
             http_port,
+            https_port,
             php_port,
             mysql_port,
         } => {
-            let config =
-                SandboxConfig::new(&app_root, &php_version).with_ports(http_port, php_port, mysql_port);
+            let config = SandboxConfig::new(&app_root, &php_version)
+                .with_ports(http_port, php_port, mysql_port)
+                .with_https_port(https_port);
             render_all_configs(&app_root, &config)?;
             println!("configs rendered under {}/conf", app_root.display());
         }
@@ -140,6 +190,72 @@ async fn main() -> Result<()> {
                     if free { "available" } else { "IN USE" }
                 );
             }
+        }
+        Commands::EnsureCacert => {
+            init_sandbox(&app_root)?;
+            let mgr = BinaryManager::new(&app_root)?;
+            mgr.ensure_cacert_bundle().await?;
+            println!("cacert ready at {}/conf/ssl/cacert.pem", app_root.display());
+        }
+        Commands::EnsureCa => {
+            init_sandbox(&app_root)?;
+            let ssl = SslManager::new(&app_root);
+            ssl.ensure_root_ca()?;
+            println!("Root CA at {}", ssl.root_ca_cert_path().display());
+        }
+        Commands::Install {
+            component,
+            php_version,
+        } => {
+            init_sandbox(&app_root)?;
+            let mgr = BinaryManager::new(&app_root)?;
+            let platform = mgr.manifest().for_current_platform();
+            let (name, spec) = match component {
+                InstallComponent::Nginx => ("nginx", &platform.nginx),
+                InstallComponent::Mariadb => ("mariadb", &platform.mariadb),
+                InstallComponent::Php => {
+                    let spec = platform
+                        .php
+                        .get(&php_version)
+                        .with_context(|| format!("PHP {php_version} not in manifest"))?;
+                    ("php", spec)
+                }
+            };
+            println!("installing {name} {} ...", spec.version);
+            mgr.install_from_spec(name, spec, |p| {
+                core_engine::binary_manager::print_progress(p);
+            })
+            .await?;
+            eprintln!();
+            println!("{name} installed under {}/{}", app_root.display(), spec.target_dir);
+        }
+        Commands::InitDb => {
+            let mgr = BinaryManager::new(&app_root)?;
+            mgr.initialize_mysql_datadir().await?;
+            println!("MySQL datadir ready under {}/data/mysql", app_root.display());
+        }
+        Commands::AddSite {
+            domain,
+            path,
+            http_port,
+            https_port,
+            php_port,
+        } => {
+            let site = add_site(&app_root, &domain, &path, http_port, https_port, php_port)?;
+            println!(
+                "site {} -> {} (public: {})",
+                site.domain,
+                site.project_path.display(),
+                site.public_path.display()
+            );
+        }
+        Commands::Dns { port } => {
+            let mut dns = LocalDnsServer::new(port);
+            dns.start().await?;
+            println!("{}", dns.mobile_hint());
+            println!("DNS listening on UDP :{port} — Ctrl+C to stop");
+            tokio::signal::ctrl_c().await?;
+            dns.stop();
         }
         Commands::Status => {
             let orch = ProcessOrchestrator::new(&app_root);
@@ -162,10 +278,7 @@ async fn main() -> Result<()> {
                 CliService::Mysql => orch.start_mysql(mysql_port).await?,
             };
             println!("{service:?} started with pid {pid}");
-            println!(
-                "note: this CLI process owns the child; keep it running or use Stop/StopAll in the same session (GUI will own lifecycle later)"
-            );
-            // Keep process alive so kill_on_drop doesn't immediately reap the child during smoke tests.
+            println!("Press Ctrl+C to stop this service");
             tokio::signal::ctrl_c().await?;
             orch.stop_service(service.into()).await?;
         }

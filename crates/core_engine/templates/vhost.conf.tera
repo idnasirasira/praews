@@ -1,8 +1,14 @@
 server {
     listen {{ http_port }};
+    listen {{ https_port }} ssl;
+    http2 on;
     server_name {{ domain }} *.{{ domain }};
     root "{{ project_public_path }}";
     index index.php index.html index.htm;
+
+    ssl_certificate     "{{ app_root }}/conf/ssl/certs/{{ domain }}.crt";
+    ssl_certificate_key "{{ app_root }}/conf/ssl/certs/{{ domain }}.key";
+    ssl_protocols       TLSv1.2 TLSv1.3;
 
     access_log "{{ app_root }}/logs/{{ domain }}_access.log";
     error_log  "{{ app_root }}/logs/{{ domain }}_error.log";
@@ -22,6 +28,7 @@ server {
         fastcgi_pass 127.0.0.1:{{ php_fastcgi_port }};
         fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
         include "{{ app_root }}/bin/nginx/conf/fastcgi_params";
+        fastcgi_param HTTPS $https if_not_empty;
     }
 
     location ~ /\.(?!well-known).* {
