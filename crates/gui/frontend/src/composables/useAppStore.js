@@ -6,6 +6,14 @@ const state = reactive({
   info: null,
   statuses: {},
   logs: "(no logs yet)",
+  logSource: "all",
+  logSources: [
+    { id: "all", label: "All" },
+    { id: "praews", label: "praews" },
+    { id: "nginx", label: "Nginx" },
+    { id: "php", label: "PHP" },
+    { id: "mysql", label: "MariaDB" },
+  ],
   progress: { text: "Ready.", kind: "" },
   busy: false,
   busyPct: null,
@@ -20,11 +28,15 @@ let pollTimer = null;
 async function refreshInfo() {
   const info = await invoke("get_app_info");
   state.info = info;
-  state.phpVersions = info.available_php_versions?.length
-    ? info.available_php_versions
-    : ["8.3"];
+  const installed = info.installed_php_versions?.length
+    ? info.installed_php_versions
+    : info.available_php_versions?.length
+      ? info.available_php_versions
+      : ["8.3"];
+  state.phpVersions = installed;
+  const active = info.settings?.active_php_version;
   state.phpVersion =
-    info.settings?.active_php_version || state.phpVersions[0] || "8.3";
+    active && installed.includes(active) ? active : installed[0] || "8.3";
   return info;
 }
 
@@ -33,8 +45,18 @@ async function refreshStatuses() {
   return state.statuses;
 }
 
-async function refreshLogs() {
-  state.logs = await invoke("read_recent_logs", { lines: 160 });
+async function refreshLogs(source = state.logSource) {
+  const result = await invoke("read_recent_logs", {
+    lines: 200,
+    source,
+  });
+  if (typeof result === "string") {
+    state.logs = result;
+  } else {
+    state.logSource = result.source || source || "all";
+    state.logSources = result.sources?.length ? result.sources : state.logSources;
+    state.logs = result.content || "(no log output yet)";
+  }
   return state.logs;
 }
 
@@ -42,7 +64,7 @@ async function clearLogs() {
   await invoke("clear_logs");
   state.logs = "(logs cleared)";
   setProgress("Logs cleared.", "ok");
-  await refreshLogs();
+  await refreshLogs(state.logSource);
 }
 
 function setProgress(text, kind = "") {
@@ -132,6 +154,7 @@ export function useAppStore() {
     },
     async switchPhp(version) {
       setBusy(true);
+      setProgress(`Switching to PHP ${version}…`);
       try {
         await invoke("switch_php_version", { version });
         state.phpVersion = version;
@@ -142,6 +165,22 @@ export function useAppStore() {
       setBusy(false);
       await refreshInfo();
       await refreshStatuses();
+    },
+    async installPhp(version) {
+      setBusy(true, 0);
+      setProgress(`Downloading PHP ${version}…`);
+      try {
+        await invoke("install_manifest_component", {
+          component: "php",
+          phpVersion: version,
+        });
+        setBusy(false);
+        setProgress(`PHP ${version} installed.`, "ok");
+      } catch (err) {
+        setBusy(false);
+        setProgress(String(err), "error");
+      }
+      await refreshInfo();
     },
     async addSite(domain, projectPath) {
       setBusy(true);

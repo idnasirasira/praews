@@ -86,7 +86,7 @@ pub struct BinaryManager {
 impl BinaryManager {
     pub fn new(app_root: impl Into<PathBuf>) -> Result<Self> {
         let client = reqwest::Client::builder()
-            .user_agent("praews/0.1 (Portable MAMP Alternative)")
+            .user_agent("praews/0.1 (Portable local stack)")
             .build()
             .unwrap_or_default();
 
@@ -422,9 +422,32 @@ impl BinaryManager {
                 .join("bin/php")
                 .join(php_version)
                 .join("php-cgi.exe"),
+            self.app_root
+                .join("bin/php")
+                .join(php_version)
+                .join("php.exe"),
+            self.app_root
+                .join("bin/php")
+                .join(php_version)
+                .join("bin/php"),
+            self.app_root
+                .join("bin/php")
+                .join(php_version)
+                .join("php"),
         ]
         .iter()
         .any(|p| p.exists())
+    }
+
+    /// Delete an installed PHP version directory under `bin/php/{version}`.
+    pub fn remove_php_version(&self, php_version: &str) -> Result<()> {
+        let dir = self.app_root.join("bin/php").join(php_version);
+        if !dir.exists() {
+            return Ok(());
+        }
+        fs::remove_dir_all(&dir)
+            .with_context(|| format!("failed to remove PHP {php_version} at {:?}", dir))?;
+        Ok(())
     }
 
     pub fn is_mariadb_installed(&self) -> bool {

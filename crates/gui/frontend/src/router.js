@@ -33,9 +33,18 @@ const routes = [
         component: () => import("./views/LogsView.vue"),
       },
       {
+        path: "php",
+        name: "php",
+        component: () => import("./views/PhpView.vue"),
+      },
+      {
         path: "tools",
         name: "tools",
         component: () => import("./views/ToolsView.vue"),
+      },
+      {
+        path: "settings",
+        redirect: { name: "tools" },
       },
       {
         path: "ports",

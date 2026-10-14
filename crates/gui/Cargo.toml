@@ -21,11 +21,19 @@ tauri-build = { version = "2", features = [] }
 core_engine = { path = "../core_engine" }
 # `custom-protocol` makes `cargo run -p gui` load frontend/dist instead of
 # http://localhost:1420 (which is only started by `cargo tauri dev`).
-tauri = { version = "2", features = ["tray-icon", "custom-protocol"] }
+tauri = { version = "2", features = ["tray-icon", "custom-protocol", "image-png"] }
 tauri-plugin-shell = "2"
+open = "5"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+# `cargo run` launches a bare binary — macOS Dock shows the generic "exec"
+# glyph unless we push our icon via NSApplication at startup.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSData"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage"] }

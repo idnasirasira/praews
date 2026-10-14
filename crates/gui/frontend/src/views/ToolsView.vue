@@ -8,6 +8,7 @@ const projectPath = ref("");
 const newRoot = ref("");
 const mode = ref("point");
 const busyRoot = ref(false);
+const busyAction = ref("");
 
 const htdocsEnabled = ref(false);
 const htdocsPath = ref("");
@@ -21,6 +22,8 @@ const defaultRoot = computed(
 const activeHtdocs = computed(
   () => store.state.info?.htdocs_root || `${store.appRoot}/htdocs`
 );
+const nginxInstalled = computed(() => !!store.state.info?.nginx_installed);
+const mariadbInstalled = computed(() => !!store.state.info?.mariadb_installed);
 
 watch(
   () => store.state.info?.settings,
@@ -42,6 +45,13 @@ const modeHelp = computed(() => {
       return "Use that folder as-is. Empty folders get a fresh sandbox layout.";
   }
 });
+
+async function reinstall(component) {
+  busyAction.value = component;
+  await store.install(component);
+  await store.refreshInfo();
+  busyAction.value = "";
+}
 
 async function applyRoot() {
   const path = newRoot.value.trim();
@@ -108,20 +118,11 @@ async function saveHtdocs() {
     <div class="pane-head">
       <div>
         <h2 id="tools-title">Tools</h2>
-        <p class="view-lede">Reinstall binaries, verify the sandbox, open a scoped terminal.</p>
+        <p class="view-lede">Verify the sandbox, trust the local CA, or open a scoped terminal.</p>
       </div>
     </div>
 
     <div class="setup-actions tools-grid">
-      <button class="btn btn-chip" type="button" @click="store.install('nginx')">
-        Reinstall Nginx
-      </button>
-      <button class="btn btn-chip" type="button" @click="store.install('php')">
-        Reinstall PHP
-      </button>
-      <button class="btn btn-chip" type="button" @click="store.install('mariadb')">
-        Reinstall MariaDB
-      </button>
       <button class="btn btn-chip" type="button" @click="store.verify()">Verify</button>
       <button class="btn btn-chip" type="button" @click="store.trustCa()">Trust CA</button>
       <button
@@ -139,6 +140,53 @@ async function saveHtdocs() {
         placeholder="Optional project path for terminal"
       />
     </form>
+  </section>
+
+  <section class="pane view-pane root-pane" aria-labelledby="stack-bin-title">
+    <div class="pane-head">
+      <div>
+        <h2 id="stack-bin-title">Stack binaries</h2>
+        <p class="view-lede">
+          Reinstall Nginx or MariaDB if a download was interrupted.
+          PHP versions live under the PHP tab.
+        </p>
+      </div>
+    </div>
+
+    <ul class="catalog-list catalog-list-compact">
+      <li class="catalog-row" :class="{ 'is-installed': nginxInstalled }">
+        <div class="catalog-main">
+          <span class="catalog-id">Nginx</span>
+          <span class="catalog-badge">{{ nginxInstalled ? "Installed" : "Missing" }}</span>
+        </div>
+        <div class="catalog-actions">
+          <button
+            class="btn btn-chip"
+            type="button"
+            :disabled="!!busyAction"
+            @click="reinstall('nginx')"
+          >
+            {{ nginxInstalled ? "Reinstall" : "Install" }}
+          </button>
+        </div>
+      </li>
+      <li class="catalog-row" :class="{ 'is-installed': mariadbInstalled }">
+        <div class="catalog-main">
+          <span class="catalog-id">MariaDB</span>
+          <span class="catalog-badge">{{ mariadbInstalled ? "Installed" : "Missing" }}</span>
+        </div>
+        <div class="catalog-actions">
+          <button
+            class="btn btn-chip"
+            type="button"
+            :disabled="!!busyAction"
+            @click="reinstall('mariadb')"
+          >
+            {{ mariadbInstalled ? "Reinstall" : "Install" }}
+          </button>
+        </div>
+      </li>
+    </ul>
   </section>
 
   <section class="pane view-pane root-pane" aria-labelledby="htdocs-title">

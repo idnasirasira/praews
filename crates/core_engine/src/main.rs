@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
-#[command(name = "praews", about = "Portable local web server (MAMP alternative) CLI")]
+#[command(name = "praews", about = "Portable local web server CLI")]
 struct Cli {
     /// Override portable sandbox root (default: PRAEWS_ROOT or cwd)
     #[arg(long, global = true)]

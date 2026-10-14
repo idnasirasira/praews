@@ -13,6 +13,7 @@ const nav = [
   { name: "ports", label: "Ports", to: "/ports" },
   { name: "phone", label: "Phone", to: "/phone" },
   { name: "logs", label: "Logs", to: "/logs" },
+  { name: "php", label: "PHP", to: "/php" },
   { name: "tools", label: "Tools", to: "/tools" },
 ];
 

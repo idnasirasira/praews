@@ -28,14 +28,10 @@ upload_tmp_dir = "{{ app_root }}/temp/php/uploads"
 upload_max_filesize = 128M
 max_file_uploads = 20
 
-; Dynamic Extension Directory
 {% if is_windows %}
+; Windows NTS builds ship shared DLLs under ext/
 extension_dir = "{{ app_root }}/bin/php/{{ php_version }}/ext"
-{% else %}
-extension_dir = "{{ app_root }}/bin/php/{{ php_version }}/lib/php/extensions"
-{% endif %}
 
-; Essential extensions for modern PHP apps
 extension=curl
 extension=fileinfo
 extension=gd
@@ -48,6 +44,11 @@ extension=pdo_mysql
 extension=pdo_sqlite
 extension=sqlite3
 extension=zip
+zend_extension=opcache
+{% else %}
+; macOS/Linux static-php builds compile extensions into the binary.
+; Do NOT enable extension= / zend_extension= here or PHP will warn about missing .so files.
+{% endif %}
 
 [Date]
 date.timezone = "{{ timezone }}"
@@ -67,7 +68,6 @@ curl.cainfo = "{{ app_root }}/conf/ssl/cacert.pem"
 openssl.cafile = "{{ app_root }}/conf/ssl/cacert.pem"
 
 [opcache]
-zend_extension=opcache
 opcache.enable=1
 opcache.enable_cli=1
 opcache.memory_consumption=128

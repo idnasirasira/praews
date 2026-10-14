@@ -78,13 +78,14 @@ impl SandboxConfig {
 pub fn render_all_configs(app_root: &Path, config: &SandboxConfig) -> Result<()> {
     init_sandbox(app_root)?;
 
-    // Keep nginx template in sync so new vars (e.g. htdocs_root) land in older sandboxes.
-    let nginx_tpl = app_root.join("templates/nginx.conf.tera");
-    fs::write(
-        &nginx_tpl,
-        include_str!("../templates/nginx.conf.tera"),
-    )
-    .with_context(|| format!("failed to refresh {:?}", nginx_tpl))?;
+    // Keep core templates in sync (older sandboxes may still have Windows-style extension= lines).
+    for (name, body) in [
+        ("nginx.conf.tera", include_str!("../templates/nginx.conf.tera")),
+        ("php.ini.tera", include_str!("../templates/php.ini.tera")),
+    ] {
+        let path = app_root.join("templates").join(name);
+        fs::write(&path, body).with_context(|| format!("failed to refresh {:?}", path))?;
+    }
 
     let template_glob = format!("{}/templates/*.tera", config.app_root);
     let tera = Tera::new(&template_glob).context("failed to load Tera templates")?;

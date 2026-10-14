@@ -1,4 +1,4 @@
-//! Portable local server core for praews (MAMP-style, zero system pollution).
+//! Portable local server core for praews (zero system pollution).
 
 pub mod binary_manager;
 pub mod cli_env;

@@ -1,6 +1,6 @@
 # praews
 
-Portable local web server environment (Nginx + PHP + MariaDB) built with Rust — a MAMP-style alternative with **zero system pollution**. Everything lives inside a sandbox folder; delete the folder and the machine is clean again.
+Portable local web server environment (Nginx + PHP + MariaDB) built with Rust — **zero system pollution**. Everything lives inside a sandbox folder; delete the folder and the machine is clean again.
 
 ## Workspace
 

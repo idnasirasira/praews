@@ -49,6 +49,7 @@ const services = computed(() => {
         >
           Switch
         </button>
+        <RouterLink class="btn btn-chip php-more" to="/php">More…</RouterLink>
       </div>
     </div>
 

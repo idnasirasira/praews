@@ -165,8 +165,8 @@ watch(
       <div>
         <h2 id="ports-title">Ports</h2>
         <p class="view-lede">
-          Change HTTP / HTTPS / MySQL ports like MAMP. Saving rewrites nginx, my.cnf, and every
-          virtual host, then restarts if the stack was running.
+          Change HTTP / HTTPS / MySQL ports without touching system defaults. Saving rewrites
+          nginx, my.cnf, and every virtual host, then restarts if the stack was running.
         </p>
       </div>
     </div>
@@ -184,9 +184,9 @@ watch(
         class="btn btn-chip"
         type="button"
         :disabled="!!applying"
-        @click="applyPreset('mamp_safe')"
+        @click="applyPreset('high_ports')"
       >
-        MAMP-safe 8888 / 8890 / 8889
+        High ports 8888 / 8890 / 8889
       </button>
       <button
         class="btn btn-chip"

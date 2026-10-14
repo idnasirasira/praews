@@ -177,6 +177,12 @@ async fn get_app_info(state: State<'_, AppState>) -> Result<serde_json::Value, S
         format_host_url("http", &lan_ip.to_string(), settings.http_port)
     );
     let php_versions = list_available_php_versions(&state);
+    let php_catalog = build_php_catalog(&state, &settings.active_php_version);
+    let installed_php_versions: Vec<String> = php_catalog
+        .iter()
+        .filter(|e| e.installed)
+        .map(|e| e.id.clone())
+        .collect();
     Ok(serde_json::json!({
         "app_root": state.app_root.to_string_lossy(),
         "default_app_root": default_app_root().to_string_lossy(),
@@ -190,6 +196,10 @@ async fn get_app_info(state: State<'_, AppState>) -> Result<serde_json::Value, S
             lan_ip, settings.dns_port, mobile_url
         ),
         "available_php_versions": php_versions,
+        "installed_php_versions": installed_php_versions,
+        "php_catalog": php_catalog,
+        "nginx_installed": state.binary_manager.is_nginx_installed(),
+        "mariadb_installed": state.binary_manager.is_mariadb_installed(),
         "htdocs_root": settings.effective_htdocs(&state.app_root).to_string_lossy(),
         "settings": settings,
     }))
@@ -208,39 +218,110 @@ const LOG_FILE_NAMES: &[&str] = &[
     "mysql_process.log",
 ];
 
-#[tauri::command]
-async fn read_recent_logs(
-    state: State<'_, AppState>,
-    lines: Option<usize>,
-) -> Result<String, String> {
-    let n = lines.unwrap_or(80);
-    let log_dir = state.app_root.join("logs");
+#[derive(Clone, Copy)]
+struct LogSourceDef {
+    id: &'static str,
+    label: &'static str,
+    files: &'static [&'static str],
+}
+
+const LOG_SOURCES: &[LogSourceDef] = &[
+    LogSourceDef {
+        id: "all",
+        label: "All",
+        files: LOG_FILE_NAMES,
+    },
+    LogSourceDef {
+        id: "praews",
+        label: "praews",
+        files: &["praews.log"],
+    },
+    LogSourceDef {
+        id: "nginx",
+        label: "Nginx",
+        files: &["nginx_error.log", "nginx_process.log"],
+    },
+    LogSourceDef {
+        id: "php",
+        label: "PHP",
+        files: &["php_error.log", "php-fpm.log", "php_process.log"],
+    },
+    LogSourceDef {
+        id: "mysql",
+        label: "MariaDB",
+        files: &[
+            "mysql_error.log",
+            "mysql_slow.log",
+            "mysql_query.log",
+            "mysql_process.log",
+        ],
+    },
+];
+
+fn read_log_tail(log_dir: &Path, files: &[&str], lines_each: usize) -> String {
     let mut out = String::new();
-    for name in LOG_FILE_NAMES {
+    let multi = files.len() > 1;
+    for name in files {
         let path = log_dir.join(name);
         if !path.exists() {
             continue;
         }
         let content = fs::read_to_string(&path).unwrap_or_default();
-        let tail: Vec<&str> = content
-            .lines()
-            .rev()
-            .take(n / LOG_FILE_NAMES.len().max(1))
-            .collect();
+        let tail: Vec<&str> = content.lines().rev().take(lines_each).collect();
         if tail.is_empty() {
             continue;
         }
-        out.push_str(&format!("===== {name} =====\n"));
+        if multi {
+            out.push_str(&format!("===== {name} =====\n"));
+        }
         for line in tail.into_iter().rev() {
             out.push_str(line);
             out.push('\n');
         }
-        out.push('\n');
+        if multi {
+            out.push('\n');
+        }
     }
     if out.is_empty() {
-        out.push_str("(no log files yet)");
+        "(no log output yet)".into()
+    } else {
+        out
     }
-    Ok(out)
+}
+
+#[tauri::command]
+async fn read_recent_logs(
+    state: State<'_, AppState>,
+    lines: Option<usize>,
+    source: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let n = lines.unwrap_or(120);
+    let source_id = source.unwrap_or_else(|| "all".into());
+    let def = LOG_SOURCES
+        .iter()
+        .find(|s| s.id == source_id)
+        .unwrap_or(&LOG_SOURCES[0]);
+    let log_dir = state.app_root.join("logs");
+    let per_file = if def.id == "all" {
+        (n / def.files.len().max(1)).max(20)
+    } else {
+        n
+    };
+    let content = read_log_tail(&log_dir, def.files, per_file);
+    let sources: Vec<serde_json::Value> = LOG_SOURCES
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "label": s.label,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "source": def.id,
+        "sources": sources,
+        "content": content,
+    }))
 }
 
 #[tauri::command]
@@ -464,6 +545,34 @@ fn list_available_php_versions(state: &AppState) -> Vec<String> {
         .collect();
     versions.sort();
     versions
+}
+
+#[derive(serde::Serialize, Clone)]
+struct PhpCatalogEntry {
+    id: String,
+    version: String,
+    installed: bool,
+    active: bool,
+    downloadable: bool,
+    note: Option<String>,
+}
+
+fn build_php_catalog(state: &AppState, active: &str) -> Vec<PhpCatalogEntry> {
+    let platform = state.binary_manager.manifest().for_current_platform();
+    let mut entries: Vec<PhpCatalogEntry> = platform
+        .php
+        .iter()
+        .map(|(id, spec)| PhpCatalogEntry {
+            id: id.clone(),
+            version: spec.version.clone(),
+            installed: state.binary_manager.is_php_installed(id),
+            active: id == active,
+            downloadable: spec.url.as_ref().map(|u| !u.is_empty()).unwrap_or(false),
+            note: spec.note.clone(),
+        })
+        .collect();
+    entries.sort_by(|a, b| a.id.cmp(&b.id));
+    entries
 }
 
 #[tauri::command]
@@ -853,11 +962,16 @@ async fn stop_all_services(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn list_php_catalog(state: State<'_, AppState>) -> Result<Vec<PhpCatalogEntry>, String> {
+    let active = state.settings.lock().await.active_php_version.clone();
+    Ok(build_php_catalog(&state, &active))
+}
+
+#[tauri::command]
 async fn switch_php_version(version: String, state: State<'_, AppState>) -> Result<(), String> {
-    let php_dir = state.app_root.join("bin/php").join(&version);
-    if !php_dir.exists() {
+    if !state.binary_manager.is_php_installed(&version) {
         return Err(format!(
-            "PHP {version} is not installed under bin/php/{version}"
+            "PHP {version} is not installed. Download it from Settings first."
         ));
     }
 
@@ -886,6 +1000,35 @@ async fn switch_php_version(version: String, state: State<'_, AppState>) -> Resu
             .await
             .map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+#[tauri::command]
+async fn remove_php_version(version: String, state: State<'_, AppState>) -> Result<(), String> {
+    let active = state.settings.lock().await.active_php_version.clone();
+    if version == active {
+        return Err(format!(
+            "Cannot remove active PHP {version}. Switch to another version first."
+        ));
+    }
+    let available = list_available_php_versions(&state);
+    if !available.iter().any(|v| v == &version) {
+        return Err(format!("PHP {version} is not in the catalog for this platform"));
+    }
+
+    let statuses = state.orchestrator.get_all_statuses().await;
+    if matches!(
+        statuses.get(&ServiceType::Php),
+        Some(ServiceStatus::Running { .. })
+    ) && active == version
+    {
+        return Err("Stop PHP or switch versions before removing.".into());
+    }
+
+    state
+        .binary_manager
+        .remove_php_version(&version)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1155,7 +1298,7 @@ async fn apply_port_preset(
             php_fastcgi_port: 9000,
             dns_port: default_dns,
         },
-        "mamp_safe" => PortConfigPayload {
+        "high_ports" | "mamp_safe" => PortConfigPayload {
             http_port: 8888,
             https_port: 8890,
             mysql_port: 8889,
@@ -1179,6 +1322,15 @@ async fn apply_port_preset(
 }
 
 #[tauri::command]
+async fn open_in_browser(url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("URL is empty.".into());
+    }
+    open::that(trimmed).map_err(|e| format!("failed to open browser: {e}"))
+}
+
+#[tauri::command]
 async fn open_project_terminal(
     project_path: String,
     state: State<'_, AppState>,
@@ -1192,6 +1344,36 @@ async fn open_project_terminal(
         .open_project_terminal(Path::new(&project_path), &active_php, mysql_port)
         .map_err(|e| e.to_string())
 }
+
+/// Brand mark used for Dock (macOS) / tray when the bundled default icon is missing.
+const APP_ICON_PNG: &[u8] = include_bytes!("../icons/icon.png");
+
+fn load_app_icon() -> Option<tauri::image::Image<'static>> {
+    tauri::image::Image::from_bytes(APP_ICON_PNG).ok()
+}
+
+/// macOS Dock uses the .app bundle icon — `cargo run` has none, so set it at runtime.
+#[cfg(target_os = "macos")]
+fn apply_macos_dock_icon() {
+    use objc2::{AnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let data = NSData::with_bytes(APP_ICON_PNG);
+    let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) else {
+        return;
+    };
+    // SAFETY: called on the AppKit main thread with a valid NSImage from PNG bytes.
+    unsafe {
+        NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&image));
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_macos_dock_icon() {}
 
 fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let show_item = MenuItem::with_id(app, "show", "Show Dashboard", true, None::<&str>)?;
@@ -1211,8 +1393,14 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
         ],
     )?;
 
+    let tray_icon = app
+        .default_window_icon()
+        .map(|icon| icon.clone().to_owned())
+        .or_else(load_app_icon)
+        .ok_or("praews icon missing (icons/icon.png)")?;
+
     let _tray = TrayIconBuilder::new()
-        .icon(app.default_window_icon().unwrap().clone())
+        .icon(tray_icon)
         .menu(&tray_menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app_handle, event| match event.id.as_ref() {
@@ -1291,6 +1479,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(app_state)
         .setup(|app| {
+            apply_macos_dock_icon();
             setup_system_tray(app)?;
             Ok(())
         })
@@ -1307,7 +1496,9 @@ pub fn run() {
             get_service_statuses,
             start_all_services,
             stop_all_services,
+            list_php_catalog,
             switch_php_version,
+            remove_php_version,
             download_and_install_binary,
             install_manifest_component,
             create_virtual_host,
@@ -1316,6 +1507,7 @@ pub fn run() {
             update_ports,
             apply_port_preset,
             open_project_terminal,
+            open_in_browser,
             read_recent_logs,
             clear_logs,
             change_app_root,
