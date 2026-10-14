@@ -547,6 +547,13 @@ select {
   padding-top: 0.15rem;
 }
 
+.svc-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
 .svc-name {
   font-weight: 600;
 }
@@ -555,7 +562,6 @@ select {
   font-family: var(--mono);
   font-size: 0.68rem;
   color: var(--ink-dim);
-  text-align: right;
 }
 
 .lamp {
@@ -709,14 +715,74 @@ select {
 }
 
 .site-form-add {
-  margin: 0 0 1rem;
-  padding-bottom: 1rem;
-  border-bottom: 1px solid var(--line);
+  margin: 0 0 0.25rem;
 }
 
 .site-form-add .btn-go {
   min-width: 7.5rem;
   white-space: nowrap;
+}
+
+.path-pick.input-group {
+  max-width: none;
+  min-width: 0;
+}
+
+.path-pick .btn-chip {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  min-width: 5.5rem;
+}
+
+.inline-path {
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
+.htdocs-folder-list {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+}
+
+.htdocs-folder-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.htdocs-folder-row:last-child {
+  border-bottom: none;
+}
+
+.resolver-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--halt) 45%, var(--line-strong));
+  background: color-mix(in srgb, var(--halt) 8%, transparent);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--ink-dim);
+}
+
+.resolver-banner p {
+  margin: 0;
+  flex: 1 1 16rem;
+}
+
+.resolver-banner code {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--ink);
 }
 
 .sites-empty {
@@ -740,7 +806,12 @@ select {
     grid-template-columns: 1fr;
   }
 
-  .site-row {
+  .path-pick {
+    grid-template-columns: 1fr auto;
+  }
+
+  .site-row,
+  .htdocs-folder-row {
     flex-direction: column;
     align-items: stretch;
   }
@@ -884,6 +955,183 @@ select {
 
 .php-more {
   text-decoration: none;
+}
+
+.catalog-path code {
+  font-size: 0.72rem;
+  word-break: break-all;
+}
+
+/* Shared input + action control: same height, joined border. */
+.input-group {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  max-width: 28rem;
+  min-height: 2.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  background: var(--void);
+  overflow: hidden;
+}
+
+.input-group:focus-within {
+  border-color: var(--go);
+}
+
+.input-group input,
+.input-group .import-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: auto;
+  margin: 0;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  padding: 0 0.75rem;
+  outline: none;
+  box-shadow: none;
+}
+
+.input-group .btn,
+.input-group button {
+  flex: 0 0 auto;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  border: 0 !important;
+  border-left: 1px solid var(--line-strong) !important;
+  border-radius: 0 !important;
+  min-width: 6.5rem;
+  padding: 0 0.95rem;
+  height: auto;
+  transform: none;
+}
+
+.input-group .btn:active,
+.input-group button:active {
+  transform: none;
+}
+
+.input-group .btn-go {
+  border-left-color: var(--go) !important;
+}
+
+.import-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: stretch;
+}
+
+.import-row.input-group {
+  flex-wrap: nowrap;
+  gap: 0;
+}
+
+.import-input {
+  flex: 1 1 14rem;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+}
+
+.php-guide {
+  margin: 0.35rem 0 1rem;
+  padding: 0.85rem 0 0.25rem;
+  border-top: 1px solid var(--line);
+}
+
+.guide-title {
+  margin: 0 0 0.55rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.guide-steps {
+  margin: 0;
+  padding-left: 1.15rem;
+  color: var(--ink-dim);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.guide-steps li + li {
+  margin-top: 0.55rem;
+}
+
+.guide-code {
+  display: block;
+  margin: 0.35rem 0 0;
+  padding: 0.55rem 0.65rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.guide-note {
+  margin: 0 0 0.65rem;
+  font-size: 0.8rem;
+  color: var(--ink-dim);
+  line-height: 1.45;
+}
+
+.guide-avail {
+  list-style: none;
+  margin: 0 0 0.85rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.guide-avail li {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.guide-k {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  padding-top: 0.1rem;
+}
+
+.add-php-form {
+  margin-top: 0.35rem;
+}
+
+.add-php-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.add-php-row.input-group {
+  max-width: 22rem;
 }
 
 .root-pane {

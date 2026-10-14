@@ -12,10 +12,11 @@ use tauri::{
 use tokio::sync::Mutex;
 
 use core_engine::{
-    add_site, get_local_lan_ip, init_sandbox, relocate_sandbox, render_all_configs,
-    render_all_vhosts, verify_portable_layout, BinaryManager, CliEnvManager, ComponentSpec,
-    LocalDnsServer, ProcessOrchestrator, RelocateMode, SandboxConfig, ServiceStatus, ServiceType,
-    SslManager,
+    add_site, detect_homebrew_php, ensure_macos_test_resolver, get_local_lan_ip, init_sandbox,
+    macos_test_resolver_ok, php_home_is_valid, php_platform_info, relocate_sandbox,
+    render_all_configs, render_all_vhosts, resolve_php_home, validate_custom_php_home,
+    verify_portable_layout, BinaryManager, CliEnvManager, ComponentSpec, LocalDnsServer,
+    ProcessOrchestrator, RelocateMode, SandboxConfig, ServiceStatus, ServiceType, SslManager,
 };
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -40,6 +41,12 @@ pub struct PersistentSettings {
     pub custom_htdocs_enabled: bool,
     #[serde(default)]
     pub custom_htdocs_path: Option<String>,
+    /// Linked PHP homes (e.g. Homebrew `php@7.4`) keyed by catalog id `"7.4"`.
+    #[serde(default)]
+    pub custom_php_paths: HashMap<String, String>,
+    /// User-declared PHP labels (any X.Y) that are not in the download manifest.
+    #[serde(default)]
+    pub extra_php_versions: Vec<String>,
 }
 
 impl Default for PersistentSettings {
@@ -54,6 +61,8 @@ impl Default for PersistentSettings {
             vhosts: Vec::new(),
             custom_htdocs_enabled: false,
             custom_htdocs_path: None,
+            custom_php_paths: HashMap::new(),
+            extra_php_versions: Vec::new(),
         }
     }
 }
@@ -96,6 +105,18 @@ impl PersistentSettings {
             .with_ports(self.http_port, self.php_fastcgi_port, self.mysql_port)
             .with_https_port(self.https_port)
             .with_htdocs_root(&self.effective_htdocs(app_root))
+    }
+
+    pub fn php_home(&self, app_root: &Path, version: &str) -> PathBuf {
+        resolve_php_home(app_root, version, &self.custom_php_paths)
+    }
+
+    pub fn php_ready(&self, app_root: &Path, binary_manager: &BinaryManager, version: &str) -> bool {
+        let home = self.php_home(app_root, version);
+        if self.custom_php_paths.contains_key(version) {
+            return php_home_is_valid(&home);
+        }
+        binary_manager.is_php_installed(version) || php_home_is_valid(&home)
     }
 }
 
@@ -176,13 +197,14 @@ async fn get_app_info(state: State<'_, AppState>) -> Result<serde_json::Value, S
         "{}/rootCA.crt",
         format_host_url("http", &lan_ip.to_string(), settings.http_port)
     );
-    let php_versions = list_available_php_versions(&state);
-    let php_catalog = build_php_catalog(&state, &settings.active_php_version);
+    let php_catalog = build_php_catalog(&state, &settings);
+    let php_versions = list_all_php_ids(&state, &settings);
     let installed_php_versions: Vec<String> = php_catalog
         .iter()
         .filter(|e| e.installed)
         .map(|e| e.id.clone())
         .collect();
+    let php_platform = php_platform_info(state.binary_manager.manifest());
     Ok(serde_json::json!({
         "app_root": state.app_root.to_string_lossy(),
         "default_app_root": default_app_root().to_string_lossy(),
@@ -195,9 +217,12 @@ async fn get_app_info(state: State<'_, AppState>) -> Result<serde_json::Value, S
             "Phone Wi-Fi DNS → {} (port {}). Or open {}",
             lan_ip, settings.dns_port, mobile_url
         ),
+        "macos_resolver_ok": macos_test_resolver_ok(settings.dns_port),
+        "dns_port": settings.dns_port,
         "available_php_versions": php_versions,
         "installed_php_versions": installed_php_versions,
         "php_catalog": php_catalog,
+        "php_platform": php_platform,
         "nginx_installed": state.binary_manager.is_nginx_installed(),
         "mariadb_installed": state.binary_manager.is_mariadb_installed(),
         "htdocs_root": settings.effective_htdocs(&state.app_root).to_string_lossy(),
@@ -534,7 +559,32 @@ struct SetupComponentStatus {
     installed: bool,
 }
 
-fn list_available_php_versions(state: &AppState) -> Vec<String> {
+fn normalize_php_label(raw: &str) -> Result<String, String> {
+    let label = raw.trim().trim_start_matches('v').trim_start_matches('V');
+    if label.is_empty() {
+        return Err("Enter a version like 7.4 or 5.6.".into());
+    }
+    if label.len() > 16 {
+        return Err("Version label is too long.".into());
+    }
+    let ok = label.chars().all(|c| c.is_ascii_digit() || c == '.')
+        && label.contains('.')
+        && !label.starts_with('.')
+        && !label.ends_with('.')
+        && !label.contains("..");
+    if !ok {
+        return Err("Use a version like 7.4, 5.6, or 8.1.".into());
+    }
+    // Prefer major.minor as the catalog id (7.4.33 → 7.4)
+    let parts: Vec<&str> = label.split('.').collect();
+    if parts.len() >= 2 {
+        Ok(format!("{}.{}", parts[0], parts[1]))
+    } else {
+        Ok(label.to_string())
+    }
+}
+
+fn list_manifest_php_versions(state: &AppState) -> Vec<String> {
     let mut versions: Vec<String> = state
         .binary_manager
         .manifest()
@@ -547,6 +597,37 @@ fn list_available_php_versions(state: &AppState) -> Vec<String> {
     versions
 }
 
+fn list_available_php_versions(state: &AppState) -> Vec<String> {
+    list_manifest_php_versions(state)
+}
+
+fn list_all_php_ids(state: &AppState, settings: &PersistentSettings) -> Vec<String> {
+    let mut set = std::collections::BTreeSet::new();
+    for v in list_manifest_php_versions(state) {
+        set.insert(v);
+    }
+    for v in &settings.extra_php_versions {
+        set.insert(v.clone());
+    }
+    for v in settings.custom_php_paths.keys() {
+        set.insert(v.clone());
+    }
+    // Sandbox installs that aren't in the manifest yet
+    let php_root = state.app_root.join("bin/php");
+    if let Ok(entries) = fs::read_dir(&php_root) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                        set.insert(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    set.into_iter().collect()
+}
+
 #[derive(serde::Serialize, Clone)]
 struct PhpCatalogEntry {
     id: String,
@@ -554,21 +635,57 @@ struct PhpCatalogEntry {
     installed: bool,
     active: bool,
     downloadable: bool,
+    /// `available` | `user` (user-added / linked)
+    source: String,
+    custom_path: Option<String>,
+    detected_homebrew: Option<String>,
     note: Option<String>,
 }
 
-fn build_php_catalog(state: &AppState, active: &str) -> Vec<PhpCatalogEntry> {
+fn build_php_catalog(state: &AppState, settings: &PersistentSettings) -> Vec<PhpCatalogEntry> {
+    let active = &settings.active_php_version;
     let platform = state.binary_manager.manifest().for_current_platform();
-    let mut entries: Vec<PhpCatalogEntry> = platform
-        .php
-        .iter()
-        .map(|(id, spec)| PhpCatalogEntry {
-            id: id.clone(),
-            version: spec.version.clone(),
-            installed: state.binary_manager.is_php_installed(id),
-            active: id == active,
-            downloadable: spec.url.as_ref().map(|u| !u.is_empty()).unwrap_or(false),
-            note: spec.note.clone(),
+    let ids = list_all_php_ids(state, settings);
+    let mut entries: Vec<PhpCatalogEntry> = ids
+        .into_iter()
+        .map(|id| {
+            let spec = platform.php.get(&id);
+            let downloadable = spec
+                .and_then(|s| s.url.as_ref())
+                .map(|u| !u.is_empty())
+                .unwrap_or(false)
+                && spec.map(|s| s.status != "custom_only").unwrap_or(true);
+            let source = if downloadable {
+                "available".to_string()
+            } else {
+                "user".to_string()
+            };
+            let version = spec
+                .map(|s| s.version.clone())
+                .unwrap_or_else(|| id.clone());
+            let custom_path = settings
+                .custom_php_paths
+                .get(&id)
+                .cloned()
+                .filter(|s| !s.trim().is_empty());
+            let installed = settings.php_ready(&state.app_root, &state.binary_manager, &id);
+            let brew = detect_homebrew_php(&id).map(|p| p.to_string_lossy().into_owned());
+            let note = if source == "user" && custom_path.is_none() {
+                Some("Add a label, then link a PHP folder (Homebrew or any build).".into())
+            } else {
+                spec.and_then(|s| s.note.clone())
+            };
+            PhpCatalogEntry {
+                id: id.clone(),
+                version,
+                installed,
+                active: &id == active,
+                downloadable,
+                source,
+                custom_path,
+                detected_homebrew: brew,
+                note,
+            }
         })
         .collect();
     entries.sort_by(|a, b| a.id.cmp(&b.id));
@@ -853,6 +970,133 @@ fn chrono_like_now() -> String {
     format!("unix:{secs}")
 }
 
+fn parse_service_type(service: &str) -> Result<ServiceType, String> {
+    match service {
+        "Nginx" | "nginx" => Ok(ServiceType::Nginx),
+        "Php" | "PHP" | "php" => Ok(ServiceType::Php),
+        "MySql" | "MySQL" | "mysql" | "MariaDB" | "mariadb" => Ok(ServiceType::MySql),
+        other => Err(format!("unknown service: {other}")),
+    }
+}
+
+async fn prepare_runtime(state: &AppState, settings: &PersistentSettings) -> Result<(), String> {
+    let root = &state.app_root;
+    init_sandbox(root).map_err(|e| e.to_string())?;
+    state
+        .binary_manager
+        .ensure_cacert_bundle()
+        .await
+        .map_err(|e| e.to_string())?;
+    let config = settings.sandbox_config(root);
+    render_all_configs(root, &config).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn start_one_service(state: &AppState, service: ServiceType) -> Result<(), String> {
+    let settings = state.settings.lock().await.clone();
+    let root = state.app_root.clone();
+    let label = match service {
+        ServiceType::Nginx => "Nginx",
+        ServiceType::Php => "PHP",
+        ServiceType::MySql => "MariaDB",
+    };
+
+    append_praews_log(&root, &format!("Start {label} requested"));
+
+    match service {
+        ServiceType::Nginx if !state.binary_manager.is_nginx_installed() => {
+            return Err("Nginx belum terpasang — install from Tools.".into());
+        }
+        ServiceType::Php
+            if !settings.php_ready(
+                &state.app_root,
+                &state.binary_manager,
+                &settings.active_php_version,
+            ) =>
+        {
+            return Err(format!(
+                "PHP {} belum siap — download or link from the PHP tab.",
+                settings.active_php_version
+            ));
+        }
+        ServiceType::MySql if !state.binary_manager.is_mariadb_installed() => {
+            return Err("MariaDB belum terpasang — install from Tools.".into());
+        }
+        _ => {}
+    }
+
+    prepare_runtime(state, &settings).await.map_err(|e| {
+        append_praews_log(&root, &format!("ERROR: {e}"));
+        e
+    })?;
+
+    let result = match service {
+        ServiceType::MySql => {
+            state
+                .binary_manager
+                .initialize_mysql_datadir()
+                .await
+                .map_err(|e| format!("MySQL init: {e}"))?;
+            state
+                .orchestrator
+                .start_mysql(settings.mysql_port)
+                .await
+                .map_err(|e| format!("MySQL: {e}"))
+        }
+        ServiceType::Php => {
+            let php_home = settings.php_home(&state.app_root, &settings.active_php_version);
+            state
+                .orchestrator
+                .start_php_at(&php_home, settings.php_fastcgi_port)
+                .await
+                .map_err(|e| format!("PHP: {e}"))
+        }
+        ServiceType::Nginx => state
+            .orchestrator
+            .start_nginx(settings.http_port)
+            .await
+            .map_err(|e| format!("Nginx: {e}")),
+    };
+
+    if let Err(e) = result {
+        append_praews_log(&root, &format!("ERROR: {e}"));
+        return Err(e);
+    }
+
+    if service == ServiceType::Nginx {
+        let mut dns = state.dns_server.lock().await;
+        match dns.start().await {
+            Ok(()) => append_praews_log(&root, "DNS started"),
+            Err(e) => append_praews_log(&root, &format!("DNS warning: {e}")),
+        }
+        drop(dns);
+        match ensure_macos_test_resolver(settings.dns_port) {
+            Ok(()) => append_praews_log(
+                &root,
+                &format!("macOS /etc/resolver/test → 127.0.0.1:{}", settings.dns_port),
+            ),
+            Err(e) => append_praews_log(&root, &format!("DNS resolver warning: {e}")),
+        }
+    }
+
+    append_praews_log(&root, &format!("Start {label} completed"));
+    Ok(())
+}
+
+#[tauri::command]
+async fn ensure_dns_resolver(state: State<'_, AppState>) -> Result<(), String> {
+    let settings = state.settings.lock().await.clone();
+    ensure_macos_test_resolver(settings.dns_port).map_err(|e| e.to_string())?;
+    append_praews_log(
+        &state.app_root,
+        &format!(
+            "macOS /etc/resolver/test fixed → 127.0.0.1:{}",
+            settings.dns_port
+        ),
+    );
+    Ok(())
+}
+
 #[tauri::command]
 async fn start_all_services(state: State<'_, AppState>) -> Result<(), String> {
     let settings = state.settings.lock().await.clone();
@@ -865,15 +1109,23 @@ async fn start_all_services(state: State<'_, AppState>) -> Result<(), String> {
 
     append_praews_log(&root, "Start All requested");
 
-    init_sandbox(&state.app_root).map_err(|e| {
-        let msg = e.to_string();
-        append_praews_log(&root, &format!("ERROR: {msg}"));
-        msg
-    })?;
-
-    let missing = state
-        .binary_manager
-        .missing_runtime_binaries(&settings.active_php_version);
+    let mut missing = Vec::new();
+    if !state.binary_manager.is_nginx_installed() {
+        missing.push("nginx — install from Tools".into());
+    }
+    if !settings.php_ready(
+        &state.app_root,
+        &state.binary_manager,
+        &settings.active_php_version,
+    ) {
+        missing.push(format!(
+            "PHP {} — download or link from the PHP tab",
+            settings.active_php_version
+        ));
+    }
+    if !state.binary_manager.is_mariadb_installed() {
+        missing.push("MariaDB — install from Tools".into());
+    }
     if !missing.is_empty() {
         let msg = format!(
             "Binaries belum terpasang:\n- {}\nJalankan first-run setup (atau Install Nginx / PHP / MariaDB), baru Start.",
@@ -882,68 +1134,45 @@ async fn start_all_services(state: State<'_, AppState>) -> Result<(), String> {
         return fail(msg);
     }
 
-    state
-        .binary_manager
-        .ensure_cacert_bundle()
-        .await
-        .map_err(|e| {
-            let msg = e.to_string();
-            append_praews_log(&root, &format!("ERROR: {msg}"));
-            msg
-        })?;
-
-    let config = settings.sandbox_config(&state.app_root);
-    render_all_configs(&state.app_root, &config).map_err(|e| {
-        let msg = e.to_string();
-        append_praews_log(&root, &format!("ERROR: {msg}"));
-        msg
+    prepare_runtime(&state, &settings).await.map_err(|e| {
+        append_praews_log(&root, &format!("ERROR: {e}"));
+        e
     })?;
 
-    state
-        .binary_manager
-        .initialize_mysql_datadir()
-        .await
-        .map_err(|e| {
-            let msg = format!("MySQL init: {e}");
-            append_praews_log(&root, &format!("ERROR: {msg}"));
-            msg
-        })?;
-
-    state
-        .orchestrator
-        .start_mysql(settings.mysql_port)
-        .await
-        .map_err(|e| {
-            let msg = format!("MySQL: {e}");
-            append_praews_log(&root, &format!("ERROR: {msg}"));
-            msg
-        })?;
-    state
-        .orchestrator
-        .start_php(&settings.active_php_version, settings.php_fastcgi_port)
-        .await
-        .map_err(|e| {
-            let msg = format!("PHP: {e}");
-            append_praews_log(&root, &format!("ERROR: {msg}"));
-            msg
-        })?;
-    state
-        .orchestrator
-        .start_nginx(settings.http_port)
-        .await
-        .map_err(|e| {
-            let msg = format!("Nginx: {e}");
-            append_praews_log(&root, &format!("ERROR: {msg}"));
-            msg
-        })?;
-
-    let mut dns = state.dns_server.lock().await;
-    match dns.start().await {
-        Ok(()) => append_praews_log(&root, "DNS started"),
-        Err(e) => append_praews_log(&root, &format!("DNS warning: {e}")),
-    }
+    start_one_service(&state, ServiceType::MySql).await?;
+    start_one_service(&state, ServiceType::Php).await?;
+    start_one_service(&state, ServiceType::Nginx).await?;
 
     append_praews_log(&root, "Start All completed");
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_service(state: State<'_, AppState>, service: String) -> Result<(), String> {
+    let service = parse_service_type(&service)?;
+    start_one_service(&state, service).await
+}
+
+#[tauri::command]
+async fn stop_service(state: State<'_, AppState>, service: String) -> Result<(), String> {
+    let service = parse_service_type(&service)?;
+    let label = match service {
+        ServiceType::Nginx => "Nginx",
+        ServiceType::Php => "PHP",
+        ServiceType::MySql => "MariaDB",
+    };
+    append_praews_log(&state.app_root, &format!("Stop {label} requested"));
+
+    if service == ServiceType::Nginx {
+        let mut dns = state.dns_server.lock().await;
+        dns.stop();
+    }
+
+    state
+        .orchestrator
+        .stop_service(service)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -962,26 +1191,31 @@ async fn stop_all_services(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn list_php_catalog(state: State<'_, AppState>) -> Result<Vec<PhpCatalogEntry>, String> {
-    let active = state.settings.lock().await.active_php_version.clone();
-    Ok(build_php_catalog(&state, &active))
+async fn list_php_catalog(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let settings = state.settings.lock().await.clone();
+    Ok(serde_json::json!({
+        "catalog": build_php_catalog(&state, &settings),
+        "platform": php_platform_info(state.binary_manager.manifest()),
+    }))
 }
 
 #[tauri::command]
 async fn switch_php_version(version: String, state: State<'_, AppState>) -> Result<(), String> {
-    if !state.binary_manager.is_php_installed(&version) {
-        return Err(format!(
-            "PHP {version} is not installed. Download it from Settings first."
-        ));
-    }
-
-    let php_port = {
+    let (php_port, php_home) = {
         let mut settings = state.settings.lock().await;
+        if !settings.php_ready(&state.app_root, &state.binary_manager, &version) {
+            return Err(format!(
+                "PHP {version} is not ready. Download it or link a custom folder from the PHP tab."
+            ));
+        }
         settings.active_php_version = version.clone();
         settings.save(&state.app_root)?;
         let config = settings.sandbox_config(&state.app_root);
         render_all_configs(&state.app_root, &config).map_err(|e| e.to_string())?;
-        settings.php_fastcgi_port
+        (
+            settings.php_fastcgi_port,
+            settings.php_home(&state.app_root, &version),
+        )
     };
 
     let statuses = state.orchestrator.get_all_statuses().await;
@@ -996,7 +1230,7 @@ async fn switch_php_version(version: String, state: State<'_, AppState>) -> Resu
             .map_err(|e| e.to_string())?;
         state
             .orchestrator
-            .start_php(&version, php_port)
+            .start_php_at(&php_home, php_port)
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -1004,31 +1238,86 @@ async fn switch_php_version(version: String, state: State<'_, AppState>) -> Resu
 }
 
 #[tauri::command]
-async fn remove_php_version(version: String, state: State<'_, AppState>) -> Result<(), String> {
-    let active = state.settings.lock().await.active_php_version.clone();
-    if version == active {
+async fn add_php_version(version_label: String, state: State<'_, AppState>) -> Result<String, String> {
+    let label = normalize_php_label(&version_label)?;
+    let in_manifest = list_manifest_php_versions(&state).iter().any(|v| v == &label);
+    let mut settings = state.settings.lock().await;
+    if !in_manifest && !settings.extra_php_versions.iter().any(|v| v == &label) {
+        settings.extra_php_versions.push(label.clone());
+        settings.extra_php_versions.sort();
+    }
+    settings.save(&state.app_root)?;
+    Ok(label)
+}
+
+#[tauri::command]
+async fn register_custom_php_path(
+    version_label: String,
+    custom_dir_path: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let label = normalize_php_label(&version_label)?;
+    let in_manifest = list_manifest_php_versions(&state).iter().any(|v| v == &label);
+    let dir = PathBuf::from(custom_dir_path.trim());
+    let version_line = validate_custom_php_home(&dir)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    {
+        let mut settings = state.settings.lock().await;
+        if !in_manifest && !settings.extra_php_versions.iter().any(|v| v == &label) {
+            settings.extra_php_versions.push(label.clone());
+            settings.extra_php_versions.sort();
+        }
+        settings
+            .custom_php_paths
+            .insert(label.clone(), dir.to_string_lossy().into_owned());
+        settings.save(&state.app_root)?;
+    }
+
+    Ok(version_line)
+}
+
+#[tauri::command]
+async fn clear_custom_php_path(
+    version_label: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let label = normalize_php_label(&version_label)?;
+    let mut settings = state.settings.lock().await;
+    if settings.active_php_version == label {
         return Err(format!(
-            "Cannot remove active PHP {version}. Switch to another version first."
+            "Cannot unlink active PHP {label}. Switch to another version first."
         ));
     }
-    let available = list_available_php_versions(&state);
-    if !available.iter().any(|v| v == &version) {
-        return Err(format!("PHP {version} is not in the catalog for this platform"));
+    settings.custom_php_paths.remove(&label);
+    settings.save(&state.app_root)?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn remove_php_version(version: String, state: State<'_, AppState>) -> Result<(), String> {
+    let label = normalize_php_label(&version)?;
+    let active = state.settings.lock().await.active_php_version.clone();
+    if label == active {
+        return Err(format!(
+            "Cannot remove active PHP {label}. Switch to another version first."
+        ));
     }
 
-    let statuses = state.orchestrator.get_all_statuses().await;
-    if matches!(
-        statuses.get(&ServiceType::Php),
-        Some(ServiceStatus::Running { .. })
-    ) && active == version
-    {
-        return Err("Stop PHP or switch versions before removing.".into());
-    }
+    let mut settings = state.settings.lock().await;
+    let had_custom = settings.custom_php_paths.remove(&label).is_some();
+    settings.extra_php_versions.retain(|v| v != &label);
+    settings.save(&state.app_root)?;
+    drop(settings);
 
-    state
-        .binary_manager
-        .remove_php_version(&version)
-        .map_err(|e| e.to_string())?;
+    // Only delete sandbox binaries for non-linked installs.
+    if !had_custom && state.binary_manager.is_php_installed(&label) {
+        state
+            .binary_manager
+            .remove_php_version(&label)
+            .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -1059,6 +1348,68 @@ async fn download_and_install_binary(
         )
         .await
         .map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize, Clone)]
+struct HtdocsFolderEntry {
+    name: String,
+    path: String,
+    suggested_domain: String,
+}
+
+#[tauri::command]
+async fn list_htdocs_folders(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let settings = state.settings.lock().await.clone();
+    let root = settings.effective_htdocs(&state.app_root);
+    let root_display = root.to_string_lossy().into_owned();
+
+    if !root.exists() {
+        return Ok(serde_json::json!({
+            "htdocs_root": root_display,
+            "folders": Vec::<HtdocsFolderEntry>::new(),
+        }));
+    }
+
+    let mut folders = Vec::new();
+    let entries = fs::read_dir(&root).map_err(|e| format!("cannot read htdocs: {e}"))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let slug = name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string();
+        let suggested = if slug.is_empty() {
+            format!("{name}.test")
+        } else {
+            format!("{slug}.test")
+        };
+        folders.push(HtdocsFolderEntry {
+            name,
+            path: path.to_string_lossy().into_owned(),
+            suggested_domain: suggested,
+        });
+    }
+    folders.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    Ok(serde_json::json!({
+        "htdocs_root": root_display,
+        "folders": folders,
+    }))
 }
 
 #[tauri::command]
@@ -1335,13 +1686,22 @@ async fn open_project_terminal(
     project_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let (active_php, mysql_port) = {
+    let (active_php, mysql_port, php_home) = {
         let settings = state.settings.lock().await;
-        (settings.active_php_version.clone(), settings.mysql_port)
+        (
+            settings.active_php_version.clone(),
+            settings.mysql_port,
+            settings.php_home(&state.app_root, &settings.active_php_version),
+        )
     };
     state
         .cli_env
-        .open_project_terminal(Path::new(&project_path), &active_php, mysql_port)
+        .open_project_terminal_from(
+            Path::new(&project_path),
+            &php_home,
+            &active_php,
+            mysql_port,
+        )
         .map_err(|e| e.to_string())
 }
 
@@ -1477,6 +1837,7 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .setup(|app| {
             apply_macos_dock_icon();
@@ -1495,13 +1856,20 @@ pub fn run() {
             run_first_setup,
             get_service_statuses,
             start_all_services,
+            start_service,
+            stop_service,
             stop_all_services,
+            ensure_dns_resolver,
             list_php_catalog,
+            add_php_version,
             switch_php_version,
+            register_custom_php_path,
+            clear_custom_php_path,
             remove_php_version,
             download_and_install_binary,
             install_manifest_component,
             create_virtual_host,
+            list_htdocs_folders,
             trust_local_root_ca,
             check_ports_availability,
             update_ports,

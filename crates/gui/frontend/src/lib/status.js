@@ -7,6 +7,12 @@ export function lampClass(status) {
   return "bad";
 }
 
+export function isRunning(status) {
+  if (!status) return false;
+  if (typeof status === "string") return status !== "Stopped" && status !== "Error";
+  return !!status.Running;
+}
+
 export function statusText(status) {
   if (!status) return "—";
   if (typeof status === "string") return status.toLowerCase();

@@ -72,17 +72,31 @@ php "$basedir/composer.phar" "$@"
         active_php_version: &str,
         mysql_port: u16,
     ) -> Result<HashMap<String, String>> {
+        self.build_scoped_env_at(
+            &self.app_root.join("bin/php").join(active_php_version),
+            active_php_version,
+            mysql_port,
+        )
+    }
+
+    pub fn build_scoped_env_at(
+        &self,
+        php_dir: &Path,
+        _active_php_version: &str,
+        mysql_port: u16,
+    ) -> Result<HashMap<String, String>> {
         let shims_dir = self.ensure_composer_shims()?;
-        let php_dir = self.app_root.join("bin/php").join(active_php_version);
         let php_bin_dir = if cfg!(target_os = "windows") {
-            php_dir.clone()
+            php_dir.to_path_buf()
         } else {
             // Prefer bin/, fall back to root of version dir.
             let bin = php_dir.join("bin");
             if bin.exists() {
                 bin
-            } else {
+            } else if php_dir.join("sbin").exists() {
                 php_dir.join("sbin")
+            } else {
+                php_dir.to_path_buf()
             }
         };
 
@@ -129,6 +143,16 @@ php "$basedir/composer.phar" "$@"
             env_vars.insert("CURL_CA_BUNDLE".to_string(), cert_str);
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            let lib = php_dir.join("lib");
+            if lib.is_dir() {
+                let s = lib.to_string_lossy().into_owned();
+                env_vars.insert("DYLD_LIBRARY_PATH".to_string(), s.clone());
+                env_vars.insert("DYLD_FALLBACK_LIBRARY_PATH".to_string(), s);
+            }
+        }
+
         let composer_home = self.app_root.join("temp/composer");
         let _ = fs::create_dir_all(&composer_home);
         env_vars.insert(
@@ -146,7 +170,18 @@ php "$basedir/composer.phar" "$@"
         active_php_version: &str,
         mysql_port: u16,
     ) -> Result<()> {
-        let scoped_env = self.build_scoped_env(active_php_version, mysql_port)?;
+        let php_dir = self.app_root.join("bin/php").join(active_php_version);
+        self.open_project_terminal_from(project_dir, &php_dir, active_php_version, mysql_port)
+    }
+
+    pub fn open_project_terminal_from(
+        &self,
+        project_dir: &Path,
+        php_dir: &Path,
+        active_php_version: &str,
+        mysql_port: u16,
+    ) -> Result<()> {
+        let scoped_env = self.build_scoped_env_at(php_dir, active_php_version, mysql_port)?;
 
         #[cfg(target_os = "windows")]
         {

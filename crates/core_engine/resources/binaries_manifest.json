@@ -17,58 +17,10 @@
       "layout": "mysql_tree"
     },
     "php": {
-      "7.0": {
-        "version": "7.0.33",
-        "url": "https://windows.php.net/downloads/releases/archives/php-7.0.33-nts-Win32-VC14-x64.zip",
-        "target_dir": "bin/php/7.0",
-        "strip_root": false,
-        "archive": "zip",
-        "layout": "php_windows"
-      },
-      "7.1": {
-        "version": "7.1.33",
-        "url": "https://windows.php.net/downloads/releases/archives/php-7.1.33-nts-Win32-VC14-x64.zip",
-        "target_dir": "bin/php/7.1",
-        "strip_root": false,
-        "archive": "zip",
-        "layout": "php_windows"
-      },
-      "7.2": {
-        "version": "7.2.34",
-        "url": "https://windows.php.net/downloads/releases/archives/php-7.2.34-nts-Win32-VC15-x64.zip",
-        "target_dir": "bin/php/7.2",
-        "strip_root": false,
-        "archive": "zip",
-        "layout": "php_windows"
-      },
-      "7.3": {
-        "version": "7.3.33",
-        "url": "https://windows.php.net/downloads/releases/archives/php-7.3.33-nts-Win32-VC15-x64.zip",
-        "target_dir": "bin/php/7.3",
-        "strip_root": false,
-        "archive": "zip",
-        "layout": "php_windows"
-      },
       "7.4": {
         "version": "7.4.33",
         "url": "https://windows.php.net/downloads/releases/archives/php-7.4.33-nts-Win32-vc15-x64.zip",
         "target_dir": "bin/php/7.4",
-        "strip_root": false,
-        "archive": "zip",
-        "layout": "php_windows"
-      },
-      "8.0": {
-        "version": "8.0.30",
-        "url": "https://windows.php.net/downloads/releases/archives/php-8.0.30-nts-Win32-vs16-x64.zip",
-        "target_dir": "bin/php/8.0",
-        "strip_root": false,
-        "archive": "zip",
-        "layout": "php_windows"
-      },
-      "8.1": {
-        "version": "8.1.34",
-        "url": "https://windows.php.net/downloads/releases/archives/php-8.1.34-nts-Win32-vs16-x64.zip",
-        "target_dir": "bin/php/8.1",
         "strip_root": false,
         "archive": "zip",
         "layout": "php_windows"
@@ -118,37 +70,6 @@
       "layout": "mariadb4j"
     },
     "php": {
-      "7.4": {
-        "version": "7.4.33",
-        "url": null,
-        "target_dir": "bin/php/7.4",
-        "strip_root": false,
-        "archive": "tar_gz",
-        "layout": "static_php",
-        "note": "No portable macOS prebuild. Drop a self-built static-php into bin/php/7.4, or use Windows / Docker."
-      },
-      "8.0": {
-        "version": "8.0.30",
-        "url": "https://dl.static-php.dev/static-php-cli/bulk/php-8.0.30-fpm-macos-aarch64.tar.gz",
-        "target_dir": "bin/php/8.0",
-        "strip_root": false,
-        "archive": "tar_gz",
-        "layout": "static_php",
-        "extra_urls": [
-          "https://dl.static-php.dev/static-php-cli/bulk/php-8.0.30-cli-macos-aarch64.tar.gz"
-        ]
-      },
-      "8.1": {
-        "version": "8.1.34",
-        "url": "https://dl.static-php.dev/static-php-cli/bulk/php-8.1.34-fpm-macos-aarch64.tar.gz",
-        "target_dir": "bin/php/8.1",
-        "strip_root": false,
-        "archive": "tar_gz",
-        "layout": "static_php",
-        "extra_urls": [
-          "https://dl.static-php.dev/static-php-cli/bulk/php-8.1.34-cli-macos-aarch64.tar.gz"
-        ]
-      },
       "8.2": {
         "version": "8.2.28",
         "url": "https://dl.static-php.dev/static-php-cli/bulk/php-8.2.28-fpm-macos-aarch64.tar.gz",
@@ -203,37 +124,6 @@
       "note": "No MariaDB4j Intel macOS package yet — use Apple Silicon or provide a portable archive URL."
     },
     "php": {
-      "7.4": {
-        "version": "7.4.33",
-        "url": null,
-        "target_dir": "bin/php/7.4",
-        "strip_root": false,
-        "archive": "tar_gz",
-        "layout": "static_php",
-        "note": "No portable macOS prebuild. Drop a self-built static-php into bin/php/7.4, or use Windows / Docker."
-      },
-      "8.0": {
-        "version": "8.0.30",
-        "url": "https://dl.static-php.dev/static-php-cli/bulk/php-8.0.30-fpm-macos-x86_64.tar.gz",
-        "target_dir": "bin/php/8.0",
-        "strip_root": false,
-        "archive": "tar_gz",
-        "layout": "static_php",
-        "extra_urls": [
-          "https://dl.static-php.dev/static-php-cli/bulk/php-8.0.30-cli-macos-x86_64.tar.gz"
-        ]
-      },
-      "8.1": {
-        "version": "8.1.34",
-        "url": "https://dl.static-php.dev/static-php-cli/bulk/php-8.1.34-fpm-macos-x86_64.tar.gz",
-        "target_dir": "bin/php/8.1",
-        "strip_root": false,
-        "archive": "tar_gz",
-        "layout": "static_php",
-        "extra_urls": [
-          "https://dl.static-php.dev/static-php-cli/bulk/php-8.1.34-cli-macos-x86_64.tar.gz"
-        ]
-      },
       "8.2": {
         "version": "8.2.28",
         "url": "https://dl.static-php.dev/static-php-cli/bulk/php-8.2.28-fpm-macos-x86_64.tar.gz",

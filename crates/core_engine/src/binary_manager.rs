@@ -39,6 +39,13 @@ pub struct ComponentSpec {
     /// Additional archives to merge into the same target_dir (e.g. php-cli + php-fpm)
     #[serde(default)]
     pub extra_urls: Vec<String>,
+    /// `available` (default) or `custom_only` (link a local/Homebrew tree — no download URL).
+    #[serde(default = "default_component_status")]
+    pub status: String,
+}
+
+fn default_component_status() -> String {
+    "available".to_string()
 }
 
 fn default_archive() -> String {

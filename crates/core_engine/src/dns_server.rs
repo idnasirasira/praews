@@ -127,6 +127,70 @@ impl RequestHandler for NamoDnsHandler {
     }
 }
 
+/// macOS routes `*.test` via `/etc/resolver/test`. Without `port {dns_port}`,
+/// the system queries `:53` (empty) and browsers hang forever on DNS.
+#[cfg(target_os = "macos")]
+pub fn macos_test_resolver_ok(dns_port: u16) -> bool {
+    let Ok(text) = std::fs::read_to_string("/etc/resolver/test") else {
+        return false;
+    };
+    let has_ns = text.lines().any(|l| {
+        let t = l.trim();
+        t == "nameserver 127.0.0.1" || t == "nameserver ::1"
+    });
+    let has_port = text
+        .lines()
+        .any(|l| l.split_whitespace().eq(["port", &dns_port.to_string()]));
+    has_ns && has_port
+}
+
+/// Write `/etc/resolver/test` (prompts for admin password via osascript).
+#[cfg(target_os = "macos")]
+pub fn ensure_macos_test_resolver(dns_port: u16) -> Result<()> {
+    if macos_test_resolver_ok(dns_port) {
+        return Ok(());
+    }
+
+    let body = format!("nameserver 127.0.0.1\\nport {dns_port}\\n");
+    let shell = format!(
+        "mkdir -p /etc/resolver && printf '{body}' > /etc/resolver/test && dscacheutil -flushcache; killall -HUP mDNSResponder 2>/dev/null; true"
+    );
+    // Escape for AppleScript string: backslash and double-quote.
+    let escaped = shell.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!("do shell script \"{escaped}\" with administrator privileges");
+
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .context("failed to run osascript for /etc/resolver/test")?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "could not write /etc/resolver/test (need admin once): {}",
+            err.trim()
+        );
+    }
+
+    if !macos_test_resolver_ok(dns_port) {
+        anyhow::bail!(
+            "/etc/resolver/test still missing port {dns_port} after write — check the file manually"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn macos_test_resolver_ok(_dns_port: u16) -> bool {
+    true
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn ensure_macos_test_resolver(_dns_port: u16) -> Result<()> {
+    Ok(())
+}
+
 /// Controller for starting/stopping the local NAMO-style DNS server.
 pub struct LocalDnsServer {
     shutdown_tx: Option<oneshot::Sender<()>>,

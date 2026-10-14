@@ -59,10 +59,128 @@ impl ProcessOrchestrator {
         TcpListener::bind(("127.0.0.1", port)).is_ok()
     }
 
-    pub async fn start_nginx(&self, http_port: u16) -> Result<u32> {
-        if !Self::is_port_available(http_port) {
-            bail!("port {http_port} is already in use");
+    /// Kill leftover Nginx/PHP/MySQL from a previous force-quit, then require a free port.
+    async fn ensure_port_ready(&self, service: ServiceType, port: u16) -> Result<()> {
+        self.reclaim_orphans_for(service, port).await;
+        if Self::is_port_available(port) {
+            return Ok(());
         }
+        // One more pass after a short wait — shutdown can be slow (MariaDB).
+        sleep(Duration::from_millis(400)).await;
+        self.reclaim_orphans_for(service, port).await;
+        if Self::is_port_available(port) {
+            Ok(())
+        } else {
+            bail!("port {port} is already in use")
+        }
+    }
+
+    /// Force-quit leaves children alive; reclaim via pidfile and/or listeners under app_root.
+    async fn reclaim_orphans_for(&self, service: ServiceType, port: u16) {
+        if let Some((pid, saved_port)) = self.read_pid_file(service) {
+            let stop_port = if port != 0 { port } else { saved_port };
+            if process_alive(pid) {
+                tracing::warn!(?service, pid, "reclaiming stale pidfile process");
+                if service == ServiceType::MySql && stop_port != 0 {
+                    let _ = self.graceful_stop_mysql(stop_port).await;
+                    sleep(Duration::from_millis(500)).await;
+                }
+                if service == ServiceType::Nginx {
+                    let _ = self.graceful_stop_nginx().await;
+                    sleep(Duration::from_millis(200)).await;
+                }
+                Self::force_kill_process_tree(pid).await;
+            }
+            self.clear_pid_file(service);
+        }
+
+        // php-fpm workers don't keep the conf path in argv — match master by our conf.
+        if service == ServiceType::Php {
+            self.reclaim_php_fpm_by_conf().await;
+        }
+
+        if port == 0 || Self::is_port_available(port) {
+            return;
+        }
+
+        let pids = listener_pids_on_port(port).await;
+        for pid in pids {
+            let target = reclaim_root_pid(pid, &self.app_root).await;
+            if let Some(root_pid) = target {
+                tracing::warn!(
+                    ?service,
+                    pid = root_pid,
+                    port,
+                    "reclaiming orphan listener under app_root"
+                );
+                if service == ServiceType::MySql {
+                    let _ = self.graceful_stop_mysql(port).await;
+                    sleep(Duration::from_millis(500)).await;
+                }
+                Self::force_kill_process_tree(root_pid).await;
+                self.clear_pid_file(service);
+                if Self::is_port_available(port) {
+                    break;
+                }
+            }
+        }
+    }
+
+    async fn reclaim_php_fpm_by_conf(&self) {
+        let conf = path_for_config(&self.app_root.join("conf/php-fpm.conf"));
+        if conf.is_empty() {
+            return;
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            // Master process title: php-fpm: master process (/path/php-fpm.conf)
+            let _ = Command::new("pkill")
+                .args(["-TERM", "-f", &format!("php-fpm: master process ({conf})")])
+                .output()
+                .await;
+            sleep(Duration::from_millis(250)).await;
+            let _ = Command::new("pkill")
+                .args(["-KILL", "-f", &format!("php-fpm: master process ({conf})")])
+                .output()
+                .await;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = conf;
+        }
+    }
+
+    fn pid_file_path(&self, service: ServiceType) -> PathBuf {
+        let name = match service {
+            ServiceType::Nginx => "nginx.pid",
+            ServiceType::Php => "php.pid",
+            ServiceType::MySql => "mysql.pid",
+        };
+        self.app_root.join("run").join(name)
+    }
+
+    fn write_pid_file(&self, service: ServiceType, pid: u32, port: u16) {
+        let path = self.pid_file_path(service);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&path, format!("{pid} {port}\n"));
+    }
+
+    fn read_pid_file(&self, service: ServiceType) -> Option<(u32, u16)> {
+        let raw = std::fs::read_to_string(self.pid_file_path(service)).ok()?;
+        let mut parts = raw.split_whitespace();
+        let pid = parts.next()?.parse().ok()?;
+        let port = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        Some((pid, port))
+    }
+
+    fn clear_pid_file(&self, service: ServiceType) {
+        let _ = std::fs::remove_file(self.pid_file_path(service));
+    }
+
+    pub async fn start_nginx(&self, http_port: u16) -> Result<u32> {
+        self.ensure_port_ready(ServiceType::Nginx, http_port).await?;
 
         let bin_name = if cfg!(target_os = "windows") {
             "nginx.exe"
@@ -86,15 +204,20 @@ impl ProcessOrchestrator {
     }
 
     pub async fn start_php(&self, version: &str, fastcgi_port: u16) -> Result<u32> {
-        if !Self::is_port_available(fastcgi_port) {
-            bail!("FastCGI port {fastcgi_port} is already in use");
-        }
-
         let php_dir = self.app_root.join("bin/php").join(version);
+        self.start_php_at(&php_dir, fastcgi_port).await
+    }
+
+    /// Start PHP-FPM / php-cgi from an explicit home (sandbox or linked custom path).
+    pub async fn start_php_at(&self, php_dir: &Path, fastcgi_port: u16) -> Result<u32> {
+        self.ensure_port_ready(ServiceType::Php, fastcgi_port)
+            .await
+            .with_context(|| format!("FastCGI port {fastcgi_port}"))?;
+
         let php_ini = self.app_root.join("conf/php.ini");
         let bind_addr = format!("127.0.0.1:{fastcgi_port}");
 
-        let cmd = if cfg!(target_os = "windows") {
+        let mut cmd = if cfg!(target_os = "windows") {
             let bin = php_dir.join("php-cgi.exe");
             ensure_binary_exists(&bin)?;
             let mut c = Command::new(bin);
@@ -102,9 +225,9 @@ impl ProcessOrchestrator {
             c.env("PHP_FCGI_MAX_REQUESTS", "0");
             c
         } else {
-            let bin = find_php_fpm(&php_dir).ok_or_else(|| {
+            let bin = find_php_fpm(php_dir).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "php-fpm not found under {:?}. Install PHP first.",
+                    "php-fpm not found under {:?}. Install or link PHP first.",
                     php_dir
                 )
             })?;
@@ -128,14 +251,14 @@ impl ProcessOrchestrator {
             c
         };
 
+        crate::php_runtime::apply_macos_php_library_env(&mut cmd, php_dir);
+
         self.spawn_and_track(ServiceType::Php, cmd, fastcgi_port, "php_process.log")
             .await
     }
 
     pub async fn start_mysql(&self, mysql_port: u16) -> Result<u32> {
-        if !Self::is_port_available(mysql_port) {
-            bail!("MySQL port {mysql_port} is already in use");
-        }
+        self.ensure_port_ready(ServiceType::MySql, mysql_port).await?;
 
         let mysql_bin_dir = self.app_root.join("bin/mysql/bin");
         // Drop legacy mysqld→mariadbd alias so argv0 is not the deprecated name.
@@ -197,6 +320,7 @@ impl ProcessOrchestrator {
         }
 
         map.insert(service, ManagedProcess { child, pid, port });
+        self.write_pid_file(service, pid, port);
         tracing::info!(?service, pid, port, "service started");
         Ok(pid)
     }
@@ -218,7 +342,11 @@ impl ProcessOrchestrator {
 
             Self::force_kill_process_tree(pid).await;
             let _ = managed.child.wait().await;
+            self.clear_pid_file(service);
             tracing::info!(?service, pid, "service stopped");
+        } else {
+            // Not tracked in this session (e.g. after force-quit / relaunch).
+            self.reclaim_orphans_for(service, 0).await;
         }
         Ok(())
     }
@@ -369,6 +497,180 @@ impl ProcessOrchestrator {
 
 fn path_for_config(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn process_alive(pid: u32) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        // OpenProcess would be better; tasklist is fine for MVP.
+        let output = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output();
+        match output {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()),
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // signal 0: existence check
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+}
+
+async fn listener_pids_on_port(port: u16) -> Vec<u32> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut pids = Vec::new();
+        let Ok(output) = Command::new("netstat").args(["-ano"]).output().await else {
+            return pids;
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let needle = format!(":{port}");
+        for line in stdout.lines() {
+            let line = line.trim();
+            if !line.contains(&needle) || !line.contains("LISTENING") {
+                continue;
+            }
+            if let Some(pid_s) = line.split_whitespace().last() {
+                if let Ok(pid) = pid_s.parse::<u32>() {
+                    if !pids.contains(&pid) {
+                        pids.push(pid);
+                    }
+                }
+            }
+        }
+        pids
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let Ok(output) = Command::new("lsof")
+            .args([
+                "-nP",
+                &format!("-iTCP:{port}"),
+                "-sTCP:LISTEN",
+                "-t",
+            ])
+            .output()
+            .await
+        else {
+            return Vec::new();
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut pids = Vec::new();
+        for line in stdout.lines() {
+            if let Ok(pid) = line.trim().parse::<u32>() {
+                if !pids.contains(&pid) {
+                    pids.push(pid);
+                }
+            }
+        }
+        pids
+    }
+}
+
+/// If `pid` (or its parent) is a praews-owned process, return the root pid to kill.
+async fn reclaim_root_pid(pid: u32, app_root: &Path) -> Option<u32> {
+    if process_belongs_to_app_root(pid, app_root).await {
+        return Some(pid);
+    }
+    // php-fpm workers: argv is just "php-fpm: pool www" — check parent master.
+    if let Some(ppid) = parent_pid(pid).await {
+        if ppid > 1 && process_belongs_to_app_root(ppid, app_root).await {
+            return Some(ppid);
+        }
+    }
+    None
+}
+
+async fn parent_pid(pid: u32) -> Option<u32> {
+    #[cfg(target_os = "windows")]
+    {
+        let output = Command::new("wmic")
+            .args([
+                "process",
+                "where",
+                &format!("ProcessId={pid}"),
+                "get",
+                "ParentProcessId",
+                "/value",
+            ])
+            .output()
+            .await
+            .ok()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            if let Some(v) = line.strip_prefix("ParentProcessId=") {
+                return v.trim().parse().ok();
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let output = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "ppid="])
+            .output()
+            .await
+            .ok()?;
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .ok()
+    }
+}
+
+async fn process_belongs_to_app_root(pid: u32, app_root: &Path) -> bool {
+    let root = app_root.to_string_lossy().replace('\\', "/");
+
+    #[cfg(target_os = "windows")]
+    {
+        let output = Command::new("wmic")
+            .args([
+                "process",
+                "where",
+                &format!("ProcessId={pid}"),
+                "get",
+                "ExecutablePath",
+                "/value",
+            ])
+            .output()
+            .await;
+        let Ok(output) = output else {
+            return false;
+        };
+        let text = String::from_utf8_lossy(&output.stdout).replace('\\', "/");
+        text.to_lowercase().contains(&root.to_lowercase())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Prefer argv (covers Homebrew-linked PHP under /opt while still using our conf).
+        let args = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "args="])
+            .output()
+            .await
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        if args.replace('\\', "/").contains(root.as_str()) {
+            return true;
+        }
+        // Fallback: executable path via lsof
+        let output = Command::new("lsof")
+            .args(["-p", &pid.to_string(), "-Fn"])
+            .output()
+            .await;
+        let Ok(output) = output else {
+            return false;
+        };
+        String::from_utf8_lossy(&output.stdout)
+            .replace('\\', "/")
+            .contains(root.as_str())
+    }
 }
 
 fn ensure_binary_exists(path: &Path) -> Result<()> {

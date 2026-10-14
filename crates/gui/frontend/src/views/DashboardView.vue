@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from "vue";
 import { useAppStore } from "../composables/useAppStore";
-import { lampClass, statusText } from "../lib/status";
+import { isRunning, lampClass, statusText } from "../lib/status";
 
 const store = useAppStore();
 const phpVersion = ref(store.state.phpVersion);
@@ -17,15 +17,26 @@ const services = computed(() => {
   const labels = { Nginx: "Nginx", Php: "PHP", MySql: "MariaDB" };
   return ["Nginx", "Php", "MySql"].map((name) => {
     const status = store.state.statuses[name] || "Stopped";
+    const running = isRunning(status);
     return {
       name,
       label: labels[name],
       status,
+      running,
       lamp: lampClass(status),
       detail: statusText(status),
     };
   });
 });
+
+async function toggleService(svc) {
+  if (store.state.busy) return;
+  if (svc.running) {
+    await store.stopService(svc.name);
+  } else {
+    await store.startService(svc.name);
+  }
+}
 </script>
 
 <template>
@@ -56,8 +67,19 @@ const services = computed(() => {
     <ul class="service-rail">
       <li v-for="svc in services" :key="svc.name">
         <span class="lamp" :class="svc.lamp" />
-        <span class="svc-name">{{ svc.label }}</span>
-        <span class="svc-detail">{{ svc.detail }}</span>
+        <div class="svc-meta">
+          <span class="svc-name">{{ svc.label }}</span>
+          <span class="svc-detail">{{ svc.detail }}</span>
+        </div>
+        <button
+          class="btn btn-chip"
+          :class="svc.running ? 'btn-halt' : 'btn-go'"
+          type="button"
+          :disabled="store.state.busy"
+          @click="toggleService(svc)"
+        >
+          {{ svc.running ? "Stop" : "Start" }}
+        </button>
       </li>
     </ul>
   </section>

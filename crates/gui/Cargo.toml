@@ -30,6 +30,7 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tauri-plugin-dialog = "2"
 
 # `cargo run` launches a bare binary — macOS Dock shows the generic "exec"
 # glyph unless we push our icon via NSApplication at startup.

@@ -152,6 +152,35 @@ export function useAppStore() {
       setBusy(false);
       await refreshStatuses();
     },
+    async startService(service) {
+      const labels = { Nginx: "Nginx", Php: "PHP", MySql: "MariaDB" };
+      const label = labels[service] || service;
+      setBusy(true);
+      setProgress(`Starting ${label}…`);
+      try {
+        await invoke("start_service", { service });
+        setProgress(`${label} is up.`, "ok");
+      } catch (err) {
+        setProgress(String(err), "error");
+      }
+      setBusy(false);
+      await refreshStatuses();
+      await refreshLogs();
+    },
+    async stopService(service) {
+      const labels = { Nginx: "Nginx", Php: "PHP", MySql: "MariaDB" };
+      const label = labels[service] || service;
+      setBusy(true);
+      setProgress(`Stopping ${label}…`);
+      try {
+        await invoke("stop_service", { service });
+        setProgress(`${label} stopped.`, "ok");
+      } catch (err) {
+        setProgress(String(err), "error");
+      }
+      setBusy(false);
+      await refreshStatuses();
+    },
     async switchPhp(version) {
       setBusy(true);
       setProgress(`Switching to PHP ${version}…`);
@@ -202,6 +231,18 @@ export function useAppStore() {
       } catch (err) {
         setProgress(String(err), "error");
       }
+    },
+    async ensureDnsResolver() {
+      setBusy(true);
+      setProgress("Fixing macOS *.test DNS resolver…");
+      try {
+        await invoke("ensure_dns_resolver");
+        setProgress("*.test DNS resolver OK. Use Open in browser (with port).", "ok");
+      } catch (err) {
+        setProgress(String(err), "error");
+      }
+      setBusy(false);
+      await refreshInfo();
     },
     async openTerminal(projectPath) {
       const info = state.info || (await refreshInfo());
