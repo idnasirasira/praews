@@ -3,7 +3,7 @@ port = {{ mysql_port }}
 socket = "{{ app_root }}/temp/mysql/mysql.sock"
 default-character-set = utf8mb4
 
-[mysqld]
+[mariadbd]
 port = {{ mysql_port }}
 bind-address = 127.0.0.1
 basedir = "{{ app_root }}/bin/mysql"

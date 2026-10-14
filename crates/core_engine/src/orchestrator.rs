@@ -138,16 +138,20 @@ impl ProcessOrchestrator {
         }
 
         let mysql_bin_dir = self.app_root.join("bin/mysql/bin");
+        // Drop legacy mysqld→mariadbd alias so argv0 is not the deprecated name.
+        let _ = std::fs::remove_file(mysql_bin_dir.join("mysqld"));
+        let _ = std::fs::remove_file(mysql_bin_dir.join("mysqld.exe"));
+
         let mysqld_bin = find_mysqld(&mysql_bin_dir).ok_or_else(|| {
             anyhow::anyhow!(
-                "mysqld/mariadbd not found under {:?}. Install MariaDB first.",
+                "mariadbd/mysqld not found under {:?}. Install MariaDB first.",
                 mysql_bin_dir
             )
         })?;
         let my_cnf = self.app_root.join("conf/my.cnf");
 
         let mut cmd = Command::new(&mysqld_bin);
-        // `--defaults-file` MUST be the first argument for mysqld.
+        // `--defaults-file` MUST be the first argument for mariadbd/mysqld.
         cmd.arg(format!("--defaults-file={}", path_for_config(&my_cnf)))
             .arg("--console");
 
@@ -389,12 +393,27 @@ fn find_php_fpm(php_dir: &Path) -> Option<PathBuf> {
 }
 
 fn find_mysqld(bin_dir: &Path) -> Option<PathBuf> {
+    // Prefer mariadbd: calling via the `mysqld` compatibility name is deprecated.
     [
-        bin_dir.join("mysqld.exe"),
+        bin_dir.join("mariadbd"),
         bin_dir.join("mariadbd.exe"),
         bin_dir.join("mysqld"),
-        bin_dir.join("mariadbd"),
+        bin_dir.join("mysqld.exe"),
     ]
     .into_iter()
-    .find(|p| p.exists())
+    .find(|p| p.exists() && !is_deprecated_mysqld_alias(p))
+}
+
+fn is_deprecated_mysqld_alias(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name != "mysqld" && name != "mysqld.exe" {
+        return false;
+    }
+    // Skip symlink/alias named mysqld when the real mariadbd sits beside it.
+    let sibling = path.with_file_name(if name.ends_with(".exe") {
+        "mariadbd.exe"
+    } else {
+        "mariadbd"
+    });
+    sibling.exists()
 }

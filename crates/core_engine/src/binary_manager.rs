@@ -434,8 +434,9 @@ impl BinaryManager {
         }
 
         let mysql_ok = [
-            self.app_root.join("bin/mysql/bin/mysqld"),
             self.app_root.join("bin/mysql/bin/mariadbd"),
+            self.app_root.join("bin/mysql/bin/mariadbd.exe"),
+            self.app_root.join("bin/mysql/bin/mysqld"),
             self.app_root.join("bin/mysql/bin/mysqld.exe"),
         ]
         .iter()
@@ -579,13 +580,27 @@ pub fn print_progress(p: DownloadProgress) {
 
 fn find_mysqld_binary(bin_dir: &Path) -> Option<PathBuf> {
     [
-        bin_dir.join("mysqld.exe"),
+        bin_dir.join("mariadbd"),
         bin_dir.join("mariadbd.exe"),
         bin_dir.join("mysqld"),
-        bin_dir.join("mariadbd"),
+        bin_dir.join("mysqld.exe"),
     ]
     .into_iter()
-    .find(|p| p.exists())
+    .find(|p| {
+        if !p.exists() {
+            return false;
+        }
+        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name == "mysqld" || name == "mysqld.exe" {
+            let sibling = p.with_file_name(if name.ends_with(".exe") {
+                "mariadbd.exe"
+            } else {
+                "mariadbd"
+            });
+            return !sibling.exists();
+        }
+        true
+    })
 }
 
 fn seed_nginx_support_files(nginx_dir: &Path) -> Result<()> {
@@ -644,10 +659,9 @@ fn normalize_mariadb4j_layout(target: &Path) -> Result<()> {
     let _ = fs::remove_dir_all(&staging);
 
     let bin = target.join("bin");
-    // Compatibility aliases expected by ProcessOrchestrator / mysqladmin shutdown.
     #[cfg(unix)]
     {
-        symlink_force(bin.join("mariadbd"), bin.join("mysqld"))?;
+        // Prefer real mariadbd name; do not create a `mysqld` alias (deprecated warning).
         if bin.join("mariadb-admin").exists() {
             symlink_force(bin.join("mariadb-admin"), bin.join("mysqladmin"))?;
         } else if bin.join("mariadb").exists() {
