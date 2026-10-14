@@ -19,7 +19,9 @@ pub use config_engine::{
 pub use dns_server::{get_local_lan_ip, LocalDnsServer};
 pub use error::CoreError;
 pub use orchestrator::{ProcessOrchestrator, ServiceStatus, ServiceType};
-pub use portable::{verify_portable_layout, PortableCheck};
+pub use portable::{
+    copy_dir_recursive, relocate_sandbox, verify_portable_layout, PortableCheck, RelocateMode,
+};
 pub use sandbox::{init_sandbox, resolve_app_root, seed_default_templates};
 pub use ssl_manager::SslManager;
 pub use vhost::{add_site, detect_public_path, load_state, SiteRecord};

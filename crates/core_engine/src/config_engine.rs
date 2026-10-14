@@ -8,6 +8,8 @@ use tera::{Context as TeraContext, Tera};
 #[derive(Debug, Clone, Serialize)]
 pub struct SandboxConfig {
     pub app_root: String,
+    /// Absolute path used as nginx `root` for the default localhost server.
+    pub htdocs_root: String,
     pub http_port: u16,
     pub https_port: u16,
     pub php_fastcgi_port: u16,
@@ -29,9 +31,12 @@ impl SandboxConfig {
                     .join(app_root_path)
             }
         });
+        let app_root = normalize_path(&absolute);
+        let htdocs_root = normalize_path(&absolute.join("htdocs"));
 
         Self {
-            app_root: normalize_path(&absolute),
+            app_root,
+            htdocs_root,
             http_port: 8888,
             https_port: 8443,
             php_fastcgi_port: 9000,
@@ -53,11 +58,33 @@ impl SandboxConfig {
         self.https_port = https;
         self
     }
+
+    pub fn with_htdocs_root(mut self, htdocs: &Path) -> Self {
+        let absolute = std::fs::canonicalize(htdocs).unwrap_or_else(|_| {
+            if htdocs.is_absolute() {
+                htdocs.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(htdocs)
+            }
+        });
+        self.htdocs_root = normalize_path(&absolute);
+        self
+    }
 }
 
 /// Render core service configs from `templates/*.tera` into `conf/`.
 pub fn render_all_configs(app_root: &Path, config: &SandboxConfig) -> Result<()> {
     init_sandbox(app_root)?;
+
+    // Keep nginx template in sync so new vars (e.g. htdocs_root) land in older sandboxes.
+    let nginx_tpl = app_root.join("templates/nginx.conf.tera");
+    fs::write(
+        &nginx_tpl,
+        include_str!("../templates/nginx.conf.tera"),
+    )
+    .with_context(|| format!("failed to refresh {:?}", nginx_tpl))?;
 
     let template_glob = format!("{}/templates/*.tera", config.app_root);
     let tera = Tera::new(&template_glob).context("failed to load Tera templates")?;

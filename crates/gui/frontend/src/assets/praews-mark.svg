@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="praews">
+  <rect width="512" height="512" rx="112" fill="#070b0a"/>
+  <!-- stack bars -->
+  <rect x="118" y="156" width="118" height="36" rx="10" fill="#b6f24a"/>
+  <rect x="118" y="214" width="148" height="36" rx="10" fill="#b6f24a"/>
+  <rect x="118" y="272" width="118" height="36" rx="10" fill="#b6f24a"/>
+  <!-- p stem -->
+  <rect x="278" y="156" width="44" height="220" rx="14" fill="#b6f24a"/>
+  <!-- p bowl -->
+  <path
+    fill="#b6f24a"
+    d="M322 156h62c52 0 90 36 90 86s-38 86-90 86h-62V156zm44 48v76h18c24 0 42-16 42-38s-18-38-42-38h-18z"
+  />
+</svg>

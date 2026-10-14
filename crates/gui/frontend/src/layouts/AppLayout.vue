@@ -2,6 +2,7 @@
 import { onMounted, computed } from "vue";
 import { useRoute } from "vue-router";
 import { useAppStore } from "../composables/useAppStore";
+import markUrl from "../assets/praews-icon.png";
 
 const route = useRoute();
 const store = useAppStore();
@@ -32,7 +33,10 @@ onMounted(async () => {
   <div class="shell">
     <header class="masthead">
       <div class="identity">
-        <h1 class="brand">praews</h1>
+        <div class="brand-row">
+          <img class="brand-mark" :src="markUrl" width="44" height="44" alt="" />
+          <h1 class="brand">praews</h1>
+        </div>
         <p class="tagline">portable local stack · zero system pollution</p>
       </div>
       <div class="power">
@@ -40,6 +44,25 @@ onMounted(async () => {
         <button class="btn btn-halt" type="button" @click="store.stopAll()">Stop</button>
       </div>
     </header>
+
+    <div class="status-bar status-top" role="status" aria-live="polite">
+      <div class="status-track">
+        <div
+          class="status-fill"
+          :class="{ indeterminate: store.state.busy && store.state.busyPct == null }"
+          :style="fillStyle"
+        />
+      </div>
+      <p
+        class="progress-line"
+        :class="{
+          'is-error': store.state.progress.kind === 'error',
+          'is-ok': store.state.progress.kind === 'ok',
+        }"
+      >
+        {{ store.state.progress.text }}
+      </p>
+    </div>
 
     <p class="meta-line">
       <span>LAN {{ store.lanIp }}</span>
@@ -66,24 +89,5 @@ onMounted(async () => {
         </Transition>
       </RouterView>
     </main>
-
-    <div class="status-bar dock-status" role="status" aria-live="polite">
-      <div class="status-track">
-        <div
-          class="status-fill"
-          :class="{ indeterminate: store.state.busy && store.state.busyPct == null }"
-          :style="fillStyle"
-        />
-      </div>
-      <p
-        class="progress-line"
-        :class="{
-          'is-error': store.state.progress.kind === 'error',
-          'is-ok': store.state.progress.kind === 'ok',
-        }"
-      >
-        {{ store.state.progress.text }}
-      </p>
-    </div>
   </div>
 </template>

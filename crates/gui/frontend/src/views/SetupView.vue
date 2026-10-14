@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { markSetupComplete } from "../router";
 import { useAppStore } from "../composables/useAppStore";
+import markUrl from "../assets/praews-icon.png";
 
 const router = useRouter();
 const store = useAppStore();
@@ -162,7 +163,10 @@ onUnmounted(() => {
   <div class="setup-gate">
     <div class="setup-stage">
       <p class="setup-kicker">First run</p>
-      <h1 class="brand setup-brand">praews</h1>
+      <div class="brand-row setup-brand-row">
+        <img class="brand-mark brand-mark-lg" :src="markUrl" width="56" height="56" alt="" />
+        <h1 class="brand setup-brand">praews</h1>
+      </div>
       <p class="setup-lead">
         Install the portable stack once — Nginx, PHP, and MariaDB stay inside this app.
         After that, just Start.

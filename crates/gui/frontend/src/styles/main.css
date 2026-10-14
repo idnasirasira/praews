@@ -93,7 +93,7 @@ body {
 }
 
 .setup-brand {
-  margin-bottom: 0.75rem;
+  margin-bottom: 0;
 }
 
 .setup-lead {
@@ -232,6 +232,31 @@ body.is-setup .atmosphere::after {
   gap: 1rem;
   padding-bottom: 0.85rem;
   border-bottom: 1px solid var(--line-strong);
+}
+
+.brand-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.brand-mark {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 11px;
+  display: block;
+  animation: brand-in 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.brand-mark-lg {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+}
+
+.setup-brand-row {
+  margin-bottom: 0.75rem;
 }
 
 .brand {
@@ -735,14 +760,89 @@ select {
   margin-top: 1rem;
 }
 
+.root-pane {
+  margin-top: 0.85rem;
+}
+
+.root-current {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0 0 0.45rem;
+}
+
+.root-label {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.root-path {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--ink);
+  word-break: break-all;
+}
+
+.root-meta {
+  margin: 0 0 0.85rem;
+  color: var(--ink-dim);
+  font-size: 0.8rem;
+}
+
+.root-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-bottom: 0.35rem;
+}
+
+.mode-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.mode-opt input {
+  accent-color: var(--go);
+}
+
+.root-help {
+  margin: 0 0 0.75rem;
+  color: var(--ink-dim);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.root-form {
+  grid-template-columns: 1fr auto;
+}
+
+.root-reset {
+  margin-top: 0.75rem;
+}
+
+.htdocs-toggle {
+  margin: 0 0 0.75rem;
+}
+
+.root-form input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .status-bar {
   margin-top: 0.75rem;
 }
 
-.dock-status {
-  margin-top: 1.15rem;
-  padding-top: 0.85rem;
-  border-top: 1px solid var(--line);
+.status-top {
+  margin: 0.85rem 0 0;
+  padding: 0.65rem 0 0.75rem;
+  border-bottom: 1px solid var(--line);
 }
 
 .status-track {

@@ -12,9 +12,10 @@ use tauri::{
 use tokio::sync::Mutex;
 
 use core_engine::{
-    add_site, get_local_lan_ip, init_sandbox, render_all_configs, render_all_vhosts,
-    verify_portable_layout, BinaryManager, CliEnvManager, ComponentSpec, LocalDnsServer,
-    ProcessOrchestrator, SandboxConfig, ServiceStatus, ServiceType, SslManager,
+    add_site, get_local_lan_ip, init_sandbox, relocate_sandbox, render_all_configs,
+    render_all_vhosts, verify_portable_layout, BinaryManager, CliEnvManager, ComponentSpec,
+    LocalDnsServer, ProcessOrchestrator, RelocateMode, SandboxConfig, ServiceStatus, ServiceType,
+    SslManager,
 };
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -34,6 +35,11 @@ pub struct PersistentSettings {
     pub php_fastcgi_port: u16,
     pub dns_port: u16,
     pub vhosts: Vec<VHostEntry>,
+    /// When true, default localhost nginx root uses `custom_htdocs_path` instead of `<sandbox>/htdocs`.
+    #[serde(default)]
+    pub custom_htdocs_enabled: bool,
+    #[serde(default)]
+    pub custom_htdocs_path: Option<String>,
 }
 
 impl Default for PersistentSettings {
@@ -46,6 +52,8 @@ impl Default for PersistentSettings {
             php_fastcgi_port: 9000,
             dns_port: if cfg!(target_os = "macos") { 53535 } else { 53 },
             vhosts: Vec::new(),
+            custom_htdocs_enabled: false,
+            custom_htdocs_path: None,
         }
     }
 }
@@ -68,6 +76,27 @@ impl PersistentSettings {
         let content = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         fs::write(state_file, content).map_err(|e| e.to_string())
     }
+
+    pub fn effective_htdocs(&self, app_root: &Path) -> PathBuf {
+        if self.custom_htdocs_enabled {
+            if let Some(path) = self
+                .custom_htdocs_path
+                .as_ref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
+                return PathBuf::from(path);
+            }
+        }
+        app_root.join("htdocs")
+    }
+
+    pub fn sandbox_config(&self, app_root: &Path) -> SandboxConfig {
+        SandboxConfig::new(app_root, &self.active_php_version)
+            .with_ports(self.http_port, self.php_fastcgi_port, self.mysql_port)
+            .with_https_port(self.https_port)
+            .with_htdocs_root(&self.effective_htdocs(app_root))
+    }
 }
 
 pub struct AppState {
@@ -80,7 +109,21 @@ pub struct AppState {
     pub cli_env: Arc<CliEnvManager>,
 }
 
-fn resolve_portable_app_root() -> PathBuf {
+/// Where we persist the user-chosen sandbox folder (outside the sandbox itself).
+fn root_pointer_path() -> PathBuf {
+    if cfg!(debug_assertions) {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(".praews-root")
+    } else {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|p| p.join("praews.root")))
+            .unwrap_or_else(|| PathBuf::from("praews.root"))
+    }
+}
+
+fn default_app_root() -> PathBuf {
     if cfg!(debug_assertions) {
         let dev_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
@@ -95,6 +138,35 @@ fn resolve_portable_app_root() -> PathBuf {
     }
 }
 
+fn read_root_pointer() -> Option<PathBuf> {
+    let pointer = root_pointer_path();
+    let content = fs::read_to_string(&pointer).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    Some(path)
+}
+
+fn write_root_pointer(root: &Path) -> Result<(), String> {
+    let pointer = root_pointer_path();
+    if let Some(parent) = pointer.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let abs = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    fs::write(&pointer, format!("{}\n", abs.display())).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn resolve_portable_app_root() -> PathBuf {
+    if let Some(from_pointer) = read_root_pointer() {
+        let _ = fs::create_dir_all(&from_pointer);
+        return fs::canonicalize(&from_pointer).unwrap_or(from_pointer);
+    }
+    default_app_root()
+}
+
 #[tauri::command]
 async fn get_app_info(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let settings = state.settings.lock().await.clone();
@@ -107,6 +179,9 @@ async fn get_app_info(state: State<'_, AppState>) -> Result<serde_json::Value, S
     let php_versions = list_available_php_versions(&state);
     Ok(serde_json::json!({
         "app_root": state.app_root.to_string_lossy(),
+        "default_app_root": default_app_root().to_string_lossy(),
+        "root_pointer": root_pointer_path().to_string_lossy(),
+        "using_custom_root": read_root_pointer().is_some(),
         "lan_ip": lan_ip.to_string(),
         "mobile_url": mobile_url,
         "root_ca_url": root_ca_url,
@@ -115,6 +190,7 @@ async fn get_app_info(state: State<'_, AppState>) -> Result<serde_json::Value, S
             lan_ip, settings.dns_port, mobile_url
         ),
         "available_php_versions": php_versions,
+        "htdocs_root": settings.effective_htdocs(&state.app_root).to_string_lossy(),
         "settings": settings,
     }))
 }
@@ -165,6 +241,172 @@ async fn read_recent_logs(
         out.push_str("(no log files yet)");
     }
     Ok(out)
+}
+
+#[tauri::command]
+async fn change_app_root(
+    app: AppHandle,
+    new_root: String,
+    mode: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let trimmed = new_root.trim();
+    if trimmed.is_empty() {
+        return Err("Folder path is required.".into());
+    }
+    let relocate_mode = match mode.as_str() {
+        "point" => RelocateMode::Point,
+        "copy" => RelocateMode::Copy,
+        "move" => RelocateMode::Move,
+        other => {
+            return Err(format!(
+                "Unknown mode '{other}'. Use point, copy, or move."
+            ))
+        }
+    };
+
+    let old_root = state.app_root.clone();
+    let new_path = PathBuf::from(trimmed);
+
+    // Stop stack before touching files.
+    {
+        let mut dns = state.dns_server.lock().await;
+        dns.stop();
+    }
+    state
+        .orchestrator
+        .stop_all()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let resolved = relocate_sandbox(&old_root, &new_path, relocate_mode).map_err(|e| e.to_string())?;
+    write_root_pointer(&resolved)?;
+
+    // Re-render configs under the new absolute paths so nginx/php/mysql stay valid.
+    let settings = PersistentSettings::load(&resolved);
+    let sandbox_cfg = settings.sandbox_config(&resolved);
+    let _ = render_all_configs(&resolved, &sandbox_cfg);
+    let vhost_pairs: Vec<(String, String)> = settings
+        .vhosts
+        .iter()
+        .map(|v| (v.domain.clone(), v.public_path.clone()))
+        .collect();
+    let _ = render_all_vhosts(&resolved, &sandbox_cfg, &vhost_pairs);
+
+    append_praews_log(
+        &resolved,
+        &format!(
+            "Sandbox root changed ({mode}) → {}",
+            resolved.display()
+        ),
+    );
+
+    // Restart so BinaryManager / orchestrator rebuild against the new root.
+    let env = app.env();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        tauri::process::restart(&env);
+    });
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "app_root": resolved.to_string_lossy(),
+        "mode": mode,
+        "restarting": true,
+        "message": "Sandbox root updated. App is restarting…",
+    }))
+}
+
+#[tauri::command]
+async fn reset_app_root(app: AppHandle, state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    {
+        let mut dns = state.dns_server.lock().await;
+        dns.stop();
+    }
+    state
+        .orchestrator
+        .stop_all()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let pointer = root_pointer_path();
+    if pointer.exists() {
+        fs::remove_file(&pointer).map_err(|e| e.to_string())?;
+    }
+    let fallback = default_app_root();
+    let _ = init_sandbox(&fallback);
+
+    let env = app.env();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        tauri::process::restart(&env);
+    });
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "app_root": fallback.to_string_lossy(),
+        "restarting": true,
+        "message": "Reverted to default sandbox. App is restarting…",
+    }))
+}
+
+#[tauri::command]
+async fn update_htdocs_root(
+    enabled: bool,
+    path: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<PersistentSettings, String> {
+    let htdocs_path = path
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    if enabled {
+        let Some(ref p) = htdocs_path else {
+            return Err("Folder path is required when custom htdocs is enabled.".into());
+        };
+        let path_buf = PathBuf::from(p);
+        fs::create_dir_all(&path_buf).map_err(|e| format!("cannot create htdocs folder: {e}"))?;
+        if !path_buf.is_dir() {
+            return Err(format!("Not a folder: {p}"));
+        }
+    }
+
+    let updated = {
+        let mut settings = state.settings.lock().await;
+        settings.custom_htdocs_enabled = enabled;
+        settings.custom_htdocs_path = htdocs_path.clone();
+        settings.save(&state.app_root)?;
+        settings.clone()
+    };
+
+    let config = updated.sandbox_config(&state.app_root);
+    render_all_configs(&state.app_root, &config).map_err(|e| e.to_string())?;
+
+    // Reload nginx if it's running so the new document root applies immediately.
+    let statuses = state.orchestrator.get_all_statuses().await;
+    if matches!(
+        statuses.get(&ServiceType::Nginx),
+        Some(ServiceStatus::Running { .. })
+    ) {
+        let _ = state.orchestrator.stop_service(ServiceType::Nginx).await;
+        let _ = state
+            .orchestrator
+            .start_nginx(updated.http_port)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    append_praews_log(
+        &state.app_root,
+        &format!(
+            "htdocs root {} → {}",
+            if enabled { "enabled" } else { "disabled" },
+            updated.effective_htdocs(&state.app_root).display()
+        ),
+    );
+
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -541,13 +783,7 @@ async fn start_all_services(state: State<'_, AppState>) -> Result<(), String> {
             msg
         })?;
 
-    let config = SandboxConfig::new(&state.app_root, &settings.active_php_version)
-        .with_ports(
-            settings.http_port,
-            settings.php_fastcgi_port,
-            settings.mysql_port,
-        )
-        .with_https_port(settings.https_port);
+    let config = settings.sandbox_config(&state.app_root);
     render_all_configs(&state.app_root, &config).map_err(|e| {
         let msg = e.to_string();
         append_praews_log(&root, &format!("ERROR: {msg}"));
@@ -625,22 +861,14 @@ async fn switch_php_version(version: String, state: State<'_, AppState>) -> Resu
         ));
     }
 
-    let (http_port, php_port, mysql_port, https_port) = {
+    let php_port = {
         let mut settings = state.settings.lock().await;
         settings.active_php_version = version.clone();
         settings.save(&state.app_root)?;
-        (
-            settings.http_port,
-            settings.php_fastcgi_port,
-            settings.mysql_port,
-            settings.https_port,
-        )
+        let config = settings.sandbox_config(&state.app_root);
+        render_all_configs(&state.app_root, &config).map_err(|e| e.to_string())?;
+        settings.php_fastcgi_port
     };
-
-    let config = SandboxConfig::new(&state.app_root, &version)
-        .with_ports(http_port, php_port, mysql_port)
-        .with_https_port(https_port);
-    render_all_configs(&state.app_root, &config).map_err(|e| e.to_string())?;
 
     let statuses = state.orchestrator.get_all_statuses().await;
     if matches!(
@@ -895,14 +1123,7 @@ async fn update_ports(
         dns.port = new_ports.dns_port;
     }
 
-    let sandbox_cfg = SandboxConfig::new(&state.app_root, &updated_settings.active_php_version)
-        .with_ports(
-            updated_settings.http_port,
-            updated_settings.php_fastcgi_port,
-            updated_settings.mysql_port,
-        )
-        .with_https_port(updated_settings.https_port);
-
+    let sandbox_cfg = updated_settings.sandbox_config(&state.app_root);
     render_all_configs(&state.app_root, &sandbox_cfg).map_err(|e| e.to_string())?;
 
     let vhost_pairs: Vec<(String, String)> = updated_settings
@@ -1097,6 +1318,9 @@ pub fn run() {
             open_project_terminal,
             read_recent_logs,
             clear_logs,
+            change_app_root,
+            reset_app_root,
+            update_htdocs_root,
             verify_portable,
         ])
         .build(tauri::generate_context!())

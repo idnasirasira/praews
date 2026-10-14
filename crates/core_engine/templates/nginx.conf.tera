@@ -33,7 +33,7 @@ http {
     server {
         listen {{ http_port }};
         server_name localhost 127.0.0.1;
-        root "{{ app_root }}/htdocs";
+        root "{{ htdocs_root }}";
         index index.php index.html index.htm;
 
         location / {

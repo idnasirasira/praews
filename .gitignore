@@ -9,6 +9,7 @@
 /dev_sandbox/
 /workspace/
 **/state.json
+.praews-root
 
 # Tauri / Node
 node_modules/
