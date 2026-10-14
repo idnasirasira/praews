@@ -2,6 +2,7 @@
 import { onMounted, computed } from "vue";
 import { useRoute } from "vue-router";
 import { useAppStore } from "../composables/useAppStore";
+import { stackSummary } from "../lib/status";
 import markUrl from "../assets/praews-icon.png";
 
 const route = useRoute();
@@ -17,6 +18,8 @@ const nav = [
   { name: "php", label: "PHP", to: "/php" },
   { name: "tools", label: "Tools", to: "/tools" },
 ];
+
+const stack = computed(() => stackSummary(store.state.statuses));
 
 const fillStyle = computed(() => {
   if (!store.state.busy) return { width: "0%" };
@@ -38,6 +41,10 @@ onMounted(async () => {
         <div class="brand-row">
           <img class="brand-mark" :src="markUrl" width="44" height="44" alt="" />
           <h1 class="brand">praews</h1>
+          <span class="stack-pill" :class="stack.kind" :title="`Stack · ${stack.label}`">
+            <span class="stack-dot" aria-hidden="true" />
+            {{ stack.label }}
+          </span>
         </div>
         <p class="tagline">portable local stack · zero system pollution</p>
       </div>

@@ -1957,15 +1957,95 @@ fn apply_macos_dock_icon() {
 #[cfg(not(target_os = "macos"))]
 fn apply_macos_dock_icon() {}
 
-fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+const TRAY_ID: &str = "main";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StackKind {
+    Stopped,
+    Starting,
+    Partial { running: usize, total: usize },
+    Running,
+    Degraded,
+}
+
+impl StackKind {
+    fn from_statuses(statuses: &HashMap<ServiceType, ServiceStatus>) -> Self {
+        const CORE: [ServiceType; 3] = [ServiceType::Nginx, ServiceType::Php, ServiceType::MySql];
+        let total = CORE.len();
+        let mut running = 0usize;
+        let mut starting = 0usize;
+        let mut errored = 0usize;
+        for service in CORE {
+            match statuses.get(&service) {
+                Some(ServiceStatus::Running { .. }) => running += 1,
+                Some(ServiceStatus::Starting) => starting += 1,
+                Some(ServiceStatus::Error(_)) => errored += 1,
+                _ => {}
+            }
+        }
+        if running == total {
+            Self::Running
+        } else if starting > 0 && running == 0 {
+            Self::Starting
+        } else if running > 0 {
+            Self::Partial { running, total }
+        } else if errored > 0 {
+            Self::Degraded
+        } else {
+            Self::Stopped
+        }
+    }
+
+    fn menu_label(self) -> String {
+        match self {
+            Self::Stopped => "Stack · Stopped".into(),
+            Self::Starting => "Stack · Starting…".into(),
+            Self::Partial { running, total } => format!("Stack · Partial ({running}/{total})"),
+            Self::Running => "Stack · Running".into(),
+            Self::Degraded => "Stack · Error".into(),
+        }
+    }
+
+    fn tooltip(self) -> String {
+        format!("praews — {}", self.short_label())
+    }
+
+    fn short_label(self) -> &'static str {
+        match self {
+            Self::Stopped => "Stopped",
+            Self::Starting => "Starting",
+            Self::Partial { .. } => "Partial",
+            Self::Running => "Running",
+            Self::Degraded => "Error",
+        }
+    }
+
+    /// Compact macOS menu-bar title next to the tray icon (singular status).
+    fn macos_title(self) -> &'static str {
+        match self {
+            Self::Running => "●",
+            Self::Partial { .. } | Self::Starting => "◐",
+            Self::Degraded => "!",
+            Self::Stopped => "",
+        }
+    }
+}
+
+fn build_tray_menu(
+    app: &impl Manager<tauri::Wry>,
+    status_label: &str,
+) -> tauri::Result<Menu<tauri::Wry>> {
+    let status_item = MenuItem::with_id(app, "stack_status", status_label, false, None::<&str>)?;
     let show_item = MenuItem::with_id(app, "show", "Show Dashboard", true, None::<&str>)?;
     let start_all = MenuItem::with_id(app, "start_all", "Start All Services", true, None::<&str>)?;
     let stop_all = MenuItem::with_id(app, "stop_all", "Stop All Services", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit & Stop Servers", true, None::<&str>)?;
-    let tray_menu = Menu::with_items(
+    Menu::with_items(
         app,
         &[
+            &status_item,
+            &separator,
             &show_item,
             &separator,
             &start_all,
@@ -1973,7 +2053,50 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
             &separator,
             &quit_item,
         ],
-    )?;
+    )
+}
+
+async fn refresh_tray_status(app: &AppHandle) {
+    use std::sync::Mutex as StdMutex;
+    static LAST_KIND: StdMutex<Option<StackKind>> = StdMutex::new(None);
+
+    let kind = {
+        let state = app.state::<AppState>();
+        let statuses = state.orchestrator.get_all_statuses().await;
+        StackKind::from_statuses(&statuses)
+    };
+
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
+
+    let _ = tray.set_tooltip(Some(kind.tooltip()));
+    let _ = tray.set_title(Some(kind.macos_title()));
+
+    let changed = {
+        let mut last = LAST_KIND.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = *last != Some(kind);
+        *last = Some(kind);
+        changed
+    };
+
+    // Rebuild menu only when the singular status changes (avoids closing an open tray menu).
+    if changed {
+        if let Ok(menu) = build_tray_menu(app, &kind.menu_label()) {
+            let _ = tray.set_menu(Some(menu));
+        }
+        let _ = app.emit(
+            "stack-status",
+            serde_json::json!({
+                "kind": kind.short_label().to_lowercase(),
+                "label": kind.menu_label(),
+            }),
+        );
+    }
+}
+
+fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let tray_menu = build_tray_menu(app, "Stack · Stopped")?;
 
     let tray_icon = app
         .default_window_icon()
@@ -1981,9 +2104,10 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
         .or_else(load_app_icon)
         .ok_or("praews icon missing (icons/icon.png)")?;
 
-    let _tray = TrayIconBuilder::new()
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .icon(tray_icon)
         .menu(&tray_menu)
+        .tooltip("praews — Stopped")
         .show_menu_on_left_click(false)
         .on_menu_event(|app_handle, event| match event.id.as_ref() {
             "show" => {
@@ -1998,6 +2122,7 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
                     let state = handle.state::<AppState>();
                     let _ = start_all_services(state).await;
                     let _ = handle.emit("services-changed", ());
+                    refresh_tray_status(&handle).await;
                 });
             }
             "stop_all" => {
@@ -2006,6 +2131,7 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
                     let state = handle.state::<AppState>();
                     let _ = stop_all_services(state).await;
                     let _ = handle.emit("services-changed", ());
+                    refresh_tray_status(&handle).await;
                 });
             }
             "quit" => {
@@ -2026,8 +2152,25 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
                     let _ = window.set_focus();
                 }
             }
-        })
-        .build(app)?;
+        });
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.icon_as_template(true).title("");
+    }
+
+    let _tray = builder.build(app)?;
+
+    let handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        // Initial paint, then keep the singular tray status in sync.
+        refresh_tray_status(&handle).await;
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(2));
+        loop {
+            ticker.tick().await;
+            refresh_tray_status(&handle).await;
+        }
+    });
 
     Ok(())
 }

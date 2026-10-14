@@ -1,17 +1,9 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import { useAppStore } from "../composables/useAppStore";
 import { isRunning, lampClass, statusText } from "../lib/status";
 
 const store = useAppStore();
-const phpVersion = ref(store.state.phpVersion);
-
-watch(
-  () => store.state.phpVersion,
-  (v) => {
-    phpVersion.value = v;
-  }
-);
 
 const services = computed(() => {
   const labels = { Nginx: "Nginx", Php: "PHP", MySql: "MariaDB" };
@@ -29,6 +21,9 @@ const services = computed(() => {
   });
 });
 
+const phpVersions = computed(() => store.state.phpVersions || []);
+const activePhp = computed(() => store.state.phpVersion);
+
 async function toggleService(svc) {
   if (store.state.busy) return;
   if (svc.running) {
@@ -36,6 +31,11 @@ async function toggleService(svc) {
   } else {
     await store.startService(svc.name);
   }
+}
+
+async function pickPhp(ver) {
+  if (store.state.busy || ver === activePhp.value) return;
+  await store.switchPhp(ver);
 }
 </script>
 
@@ -46,21 +46,23 @@ async function toggleService(svc) {
         <h2 id="svc-title">Services</h2>
         <p class="view-lede">Start the stack and watch Nginx, PHP, and MariaDB.</p>
       </div>
-      <div class="php-switch">
-        <label for="php-version">PHP</label>
-        <select id="php-version" v-model="phpVersion">
-          <option v-for="ver in store.state.phpVersions" :key="ver" :value="ver">
+      <div class="php-switch" role="group" aria-label="Active PHP version">
+        <span class="php-switch-label">PHP</span>
+        <div class="php-chips">
+          <button
+            v-for="ver in phpVersions"
+            :key="ver"
+            type="button"
+            class="php-chip"
+            :class="{ active: ver === activePhp }"
+            :disabled="store.state.busy"
+            :aria-pressed="ver === activePhp"
+            @click="pickPhp(ver)"
+          >
             {{ ver }}
-          </option>
-        </select>
-        <button
-          class="btn btn-ghost"
-          type="button"
-          @click="store.switchPhp(phpVersion)"
-        >
-          Switch
-        </button>
-        <RouterLink class="btn btn-chip php-more" to="/php">More…</RouterLink>
+          </button>
+        </div>
+        <RouterLink class="btn btn-chip php-more" to="/php">Manage</RouterLink>
       </div>
     </div>
 
