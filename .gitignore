@@ -20,3 +20,6 @@ crates/gui/gen/
 .idea/
 .vscode/
 *.iml
+
+# Local planning / notes (keep on disk, don't publish)
+/notes/
