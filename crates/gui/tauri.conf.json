@@ -4,15 +4,19 @@
   "version": "0.1.0",
   "identifier": "dev.praews.app",
   "build": {
-    "frontendDist": "ui"
+    "beforeDevCommand": "npm run dev --prefix frontend",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build --prefix frontend",
+    "frontendDist": "frontend/dist"
   },
   "app": {
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "windows": [
       {
+        "label": "main",
         "title": "praews",
         "width": 980,
-        "height": 680,
+        "height": 720,
         "resizable": true
       }
     ],

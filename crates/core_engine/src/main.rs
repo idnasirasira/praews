@@ -94,6 +94,8 @@ enum Commands {
     EnvSnippet {
         #[arg(long, default_value = "8.3")]
         php_version: String,
+        #[arg(long, default_value_t = 3306)]
+        mysql_port: u16,
     },
 
     /// Open an OS terminal with portable PHP/MySQL/Composer PATH injected
@@ -102,6 +104,8 @@ enum Commands {
         path: PathBuf,
         #[arg(long, default_value = "8.3")]
         php_version: String,
+        #[arg(long, default_value_t = 3306)]
+        mysql_port: u16,
     },
 
     /// Verify sandbox layout is self-contained (Phase 6)
@@ -294,14 +298,21 @@ async fn main() -> Result<()> {
             }
             println!("shims ready at {}", shims.display());
         }
-        Commands::EnvSnippet { php_version } => {
+        Commands::EnvSnippet {
+            php_version,
+            mysql_port,
+        } => {
             let cli = CliEnvManager::new(&app_root);
-            println!("{}", cli.export_shell_snippet(&php_version)?);
+            println!("{}", cli.export_shell_snippet(&php_version, mysql_port)?);
         }
-        Commands::OpenTerminal { path, php_version } => {
+        Commands::OpenTerminal {
+            path,
+            php_version,
+            mysql_port,
+        } => {
             init_sandbox(&app_root)?;
             let cli = CliEnvManager::new(&app_root);
-            cli.open_project_terminal(&path, &php_version)?;
+            cli.open_project_terminal(&path, &php_version, mysql_port)?;
             println!("opened terminal in {} (PHP {php_version})", path.display());
         }
         Commands::VerifyPortable => {

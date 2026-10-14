@@ -54,6 +54,17 @@
       "layout": "mariadb4j"
     },
     "php": {
+      "8.2": {
+        "version": "8.2.28",
+        "url": "https://dl.static-php.dev/static-php-cli/bulk/php-8.2.28-fpm-macos-aarch64.tar.gz",
+        "target_dir": "bin/php/8.2",
+        "strip_root": false,
+        "archive": "tar_gz",
+        "layout": "static_php",
+        "extra_urls": [
+          "https://dl.static-php.dev/static-php-cli/bulk/php-8.2.28-cli-macos-aarch64.tar.gz"
+        ]
+      },
       "8.3": {
         "version": "8.3.12",
         "url": "https://dl.static-php.dev/static-php-cli/bulk/php-8.3.12-fpm-macos-aarch64.tar.gz",
@@ -63,6 +74,17 @@
         "layout": "static_php",
         "extra_urls": [
           "https://dl.static-php.dev/static-php-cli/bulk/php-8.3.12-cli-macos-aarch64.tar.gz"
+        ]
+      },
+      "8.4": {
+        "version": "8.4.5",
+        "url": "https://dl.static-php.dev/static-php-cli/bulk/php-8.4.5-fpm-macos-aarch64.tar.gz",
+        "target_dir": "bin/php/8.4",
+        "strip_root": false,
+        "archive": "tar_gz",
+        "layout": "static_php",
+        "extra_urls": [
+          "https://dl.static-php.dev/static-php-cli/bulk/php-8.4.5-cli-macos-aarch64.tar.gz"
         ]
       }
     }
@@ -86,6 +108,17 @@
       "note": "No MariaDB4j Intel macOS package yet — use Apple Silicon or provide a portable archive URL."
     },
     "php": {
+      "8.2": {
+        "version": "8.2.28",
+        "url": "https://dl.static-php.dev/static-php-cli/bulk/php-8.2.28-fpm-macos-x86_64.tar.gz",
+        "target_dir": "bin/php/8.2",
+        "strip_root": false,
+        "archive": "tar_gz",
+        "layout": "static_php",
+        "extra_urls": [
+          "https://dl.static-php.dev/static-php-cli/bulk/php-8.2.28-cli-macos-x86_64.tar.gz"
+        ]
+      },
       "8.3": {
         "version": "8.3.12",
         "url": "https://dl.static-php.dev/static-php-cli/bulk/php-8.3.12-fpm-macos-x86_64.tar.gz",
@@ -95,6 +128,17 @@
         "layout": "static_php",
         "extra_urls": [
           "https://dl.static-php.dev/static-php-cli/bulk/php-8.3.12-cli-macos-x86_64.tar.gz"
+        ]
+      },
+      "8.4": {
+        "version": "8.4.5",
+        "url": "https://dl.static-php.dev/static-php-cli/bulk/php-8.4.5-fpm-macos-x86_64.tar.gz",
+        "target_dir": "bin/php/8.4",
+        "strip_root": false,
+        "archive": "tar_gz",
+        "layout": "static_php",
+        "extra_urls": [
+          "https://dl.static-php.dev/static-php-cli/bulk/php-8.4.5-cli-macos-x86_64.tar.gz"
         ]
       }
     }

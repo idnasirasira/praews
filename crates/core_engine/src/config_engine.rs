@@ -120,3 +120,23 @@ pub fn render_vhost(app_root: &Path, vhost: &VhostConfig) -> Result<std::path::P
     tracing::info!(path = %output.display(), "wrote vhost config");
     Ok(output)
 }
+
+/// Re-render every virtual host when HTTP/HTTPS/FastCGI ports change.
+pub fn render_all_vhosts(
+    app_root: &Path,
+    config: &SandboxConfig,
+    vhosts: &[(String, String)],
+) -> Result<()> {
+    for (domain, public_path) in vhosts {
+        let vhost = VhostConfig {
+            app_root: config.app_root.clone(),
+            http_port: config.http_port,
+            https_port: config.https_port,
+            php_fastcgi_port: config.php_fastcgi_port,
+            domain: domain.clone(),
+            project_public_path: public_path.clone(),
+        };
+        render_vhost(app_root, &vhost)?;
+    }
+    Ok(())
+}

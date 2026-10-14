@@ -67,7 +67,11 @@ php "$basedir/composer.phar" "$@"
     }
 
     /// Build env vars that only apply to child processes (never written to the OS).
-    pub fn build_scoped_env(&self, active_php_version: &str) -> Result<HashMap<String, String>> {
+    pub fn build_scoped_env(
+        &self,
+        active_php_version: &str,
+        mysql_port: u16,
+    ) -> Result<HashMap<String, String>> {
         let shims_dir = self.ensure_composer_shims()?;
         let php_dir = self.app_root.join("bin/php").join(active_php_version);
         let php_bin_dir = if cfg!(target_os = "windows") {
@@ -107,6 +111,17 @@ php "$basedir/composer.phar" "$@"
             self.app_root.join("conf").to_string_lossy().into_owned(),
         );
 
+        // Point `mysql` / `mariadb` clients at the sandbox MySQL port.
+        env_vars.insert("MYSQL_TCP_PORT".to_string(), mysql_port.to_string());
+        env_vars.insert("MYSQL_HOST".to_string(), "127.0.0.1".to_string());
+        env_vars.insert(
+            "MYSQL_UNIX_PORT".to_string(),
+            self.app_root
+                .join("temp/mysql/mysql.sock")
+                .to_string_lossy()
+                .into_owned(),
+        );
+
         let cacert_path = self.app_root.join("conf/ssl/cacert.pem");
         if cacert_path.exists() {
             let cert_str = cacert_path.to_string_lossy().into_owned();
@@ -129,8 +144,9 @@ php "$basedir/composer.phar" "$@"
         &self,
         project_dir: &Path,
         active_php_version: &str,
+        mysql_port: u16,
     ) -> Result<()> {
-        let scoped_env = self.build_scoped_env(active_php_version)?;
+        let scoped_env = self.build_scoped_env(active_php_version, mysql_port)?;
 
         #[cfg(target_os = "windows")]
         {
@@ -141,7 +157,7 @@ php "$basedir/composer.phar" "$@"
                 .unwrap_or(false);
 
             let banner = format!(
-                "Write-Host 'praews CLI (PHP {active_php_version}) ready' -ForegroundColor Green"
+                "Write-Host 'praews CLI (PHP {active_php_version}, MySQL :{mysql_port}) ready' -ForegroundColor Green"
             );
 
             let mut cmd = if has_wt {
@@ -175,6 +191,16 @@ php "$basedir/composer.phar" "$@"
             let composer_home = scoped_env
                 .get("COMPOSER_HOME")
                 .context("COMPOSER_HOME missing")?;
+            let mysql_tcp = scoped_env
+                .get("MYSQL_TCP_PORT")
+                .context("MYSQL_TCP_PORT missing")?;
+            let mysql_host = scoped_env
+                .get("MYSQL_HOST")
+                .context("MYSQL_HOST missing")?;
+            let mysql_sock = scoped_env
+                .get("MYSQL_UNIX_PORT")
+                .cloned()
+                .unwrap_or_default();
             let ssl_cert = scoped_env
                 .get("SSL_CERT_FILE")
                 .cloned()
@@ -189,11 +215,14 @@ php "$basedir/composer.phar" "$@"
 export PATH=\"{path_val}\"\n\
 export PHPRC=\"{phprc_val}\"\n\
 export COMPOSER_HOME=\"{composer_home}\"\n\
+export MYSQL_TCP_PORT=\"{mysql_tcp}\"\n\
+export MYSQL_HOST=\"{mysql_host}\"\n\
+export MYSQL_UNIX_PORT=\"{mysql_sock}\"\n\
 export SSL_CERT_FILE=\"{ssl_cert}\"\n\
 export CURL_CA_BUNDLE=\"{curl_ca}\"\n\
 cd \"{}\"\n\
 clear\n\
-echo \"\\033[1;32mpraews CLI (PHP {active_php_version}) ready\\033[0m\"\n\
+echo \"\\033[1;32mpraews CLI (PHP {active_php_version}, MySQL :{mysql_port}) ready\\033[0m\"\n\
 exec /bin/zsh -i\n",
                 project_dir.to_string_lossy()
             );
@@ -223,10 +252,23 @@ exec /bin/zsh -i\n",
     }
 
     /// Print a shell snippet the user can `eval` (optional; still process-scoped if sourced).
-    pub fn export_shell_snippet(&self, active_php_version: &str) -> Result<String> {
-        let env = self.build_scoped_env(active_php_version)?;
+    pub fn export_shell_snippet(
+        &self,
+        active_php_version: &str,
+        mysql_port: u16,
+    ) -> Result<String> {
+        let env = self.build_scoped_env(active_php_version, mysql_port)?;
         let mut lines = Vec::new();
-        for key in ["PATH", "PHPRC", "COMPOSER_HOME", "SSL_CERT_FILE", "CURL_CA_BUNDLE"] {
+        for key in [
+            "PATH",
+            "PHPRC",
+            "COMPOSER_HOME",
+            "MYSQL_TCP_PORT",
+            "MYSQL_HOST",
+            "MYSQL_UNIX_PORT",
+            "SSL_CERT_FILE",
+            "CURL_CA_BUNDLE",
+        ] {
             if let Some(val) = env.get(key) {
                 lines.push(format!("export {key}=\"{val}\""));
             }

@@ -11,9 +11,11 @@ pub mod sandbox;
 pub mod ssl_manager;
 pub mod vhost;
 
-pub use binary_manager::{BinaryManager, DownloadProgress};
+pub use binary_manager::{BinaryManager, ComponentSpec, DownloadProgress};
 pub use cli_env::CliEnvManager;
-pub use config_engine::{render_all_configs, render_vhost, SandboxConfig, VhostConfig};
+pub use config_engine::{
+    render_all_configs, render_all_vhosts, render_vhost, SandboxConfig, VhostConfig,
+};
 pub use dns_server::{get_local_lan_ip, LocalDnsServer};
 pub use error::CoreError;
 pub use orchestrator::{ProcessOrchestrator, ServiceStatus, ServiceType};

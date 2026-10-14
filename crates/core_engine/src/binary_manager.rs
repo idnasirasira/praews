@@ -399,19 +399,17 @@ impl BinaryManager {
         Ok(())
     }
 
-    /// Missing runtime binaries with actionable install hints.
-    pub fn missing_runtime_binaries(&self, php_version: &str) -> Vec<String> {
-        let mut missing = Vec::new();
+    pub fn is_nginx_installed(&self) -> bool {
         let nginx = self.app_root.join(if cfg!(target_os = "windows") {
             "bin/nginx/nginx.exe"
         } else {
             "bin/nginx/nginx"
         });
-        if !nginx.exists() {
-            missing.push("nginx — click Install → Nginx".into());
-        }
+        nginx.exists()
+    }
 
-        let php_ok = [
+    pub fn is_php_installed(&self, php_version: &str) -> bool {
+        [
             self.app_root
                 .join("bin/php")
                 .join(php_version)
@@ -426,25 +424,32 @@ impl BinaryManager {
                 .join("php-cgi.exe"),
         ]
         .iter()
-        .any(|p| p.exists());
-        if !php_ok {
-            missing.push(format!(
-                "PHP {php_version} — click Install → PHP"
-            ));
-        }
+        .any(|p| p.exists())
+    }
 
-        let mysql_ok = [
+    pub fn is_mariadb_installed(&self) -> bool {
+        [
             self.app_root.join("bin/mysql/bin/mariadbd"),
             self.app_root.join("bin/mysql/bin/mariadbd.exe"),
             self.app_root.join("bin/mysql/bin/mysqld"),
             self.app_root.join("bin/mysql/bin/mysqld.exe"),
         ]
         .iter()
-        .any(|p| p.exists());
-        if !mysql_ok {
+        .any(|p| p.exists())
+    }
+
+    /// Missing runtime binaries with actionable install hints.
+    pub fn missing_runtime_binaries(&self, php_version: &str) -> Vec<String> {
+        let mut missing = Vec::new();
+        if !self.is_nginx_installed() {
+            missing.push("nginx — click Install → Nginx".into());
+        }
+        if !self.is_php_installed(php_version) {
+            missing.push(format!("PHP {php_version} — click Install → PHP"));
+        }
+        if !self.is_mariadb_installed() {
             missing.push("MariaDB — click Install → MariaDB".into());
         }
-
         missing
     }
 

@@ -7,7 +7,7 @@ Portable local web server environment (Nginx + PHP + MariaDB) built with Rust �
 | Crate | Role |
 |-------|------|
 | `crates/core_engine` | Library + `praews` CLI: sandbox init, Tera config engine, process orchestrator |
-| `crates/gui` | Tauri v2 dashboard + system tray |
+| `crates/gui` | Tauri v2 + Vue 3 dashboard + system tray (`frontend/`) |
 
 ## Quick start
 
@@ -33,9 +33,14 @@ cargo run -p core_engine -- --root ./sandbox dns
 # Install portable binaries (Windows URLs ready in manifest; macOS needs archive URLs)
 cargo run -p core_engine -- --root ./sandbox install nginx
 
-# GUI (Tauri) — uses ./dev_sandbox in debug builds
+# GUI (Tauri + Vue 3) — uses ./dev_sandbox in debug builds
+# First time: npm install --prefix crates/gui/frontend && npm run build --prefix crates/gui/frontend
 cargo run -p gui
+
+# Hot-reload frontend (starts Vite on :1420). Requires: cargo install tauri-cli
+# cargo tauri dev --manifest-path crates/gui/Cargo.toml
 ```
+
 
 ## Principles
 
