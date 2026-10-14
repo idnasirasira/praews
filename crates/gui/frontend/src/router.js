@@ -51,6 +51,11 @@ const routes = [
         name: "ports",
         component: () => import("./views/PortsView.vue"),
       },
+      {
+        path: "config",
+        name: "config",
+        component: () => import("./views/ConfigView.vue"),
+      },
     ],
   },
 ];

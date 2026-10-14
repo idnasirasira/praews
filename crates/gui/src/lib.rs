@@ -15,8 +15,10 @@ use core_engine::{
     add_site, detect_homebrew_php, ensure_macos_test_resolver, get_local_lan_ip, init_sandbox,
     macos_test_resolver_ok, php_home_is_valid, php_platform_info, relocate_sandbox,
     render_all_configs, render_all_vhosts, resolve_php_home, validate_custom_php_home,
-    verify_portable_layout, BinaryManager, CliEnvManager, ComponentSpec, LocalDnsServer,
-    ProcessOrchestrator, RelocateMode, SandboxConfig, ServiceStatus, ServiceType, SslManager,
+    verify_portable_layout, BinaryManager, CliEnvManager, ComponentSpec, ConfigEditorManager,
+    ConfigTarget, LocalDnsServer, MySqlVisualSettings, NginxVisualSettings, PhpExtensionInfo,
+    PhpVisualSettings, ProcessOrchestrator, RelocateMode, SandboxConfig, ServiceStatus,
+    ServiceType, SslManager,
 };
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -47,6 +49,13 @@ pub struct PersistentSettings {
     /// User-declared PHP labels (any X.Y) that are not in the download manifest.
     #[serde(default)]
     pub extra_php_versions: Vec<String>,
+    /// Visual quick-tuning persisted in state.json (Layer 1).
+    #[serde(default)]
+    pub php_settings: PhpVisualSettings,
+    #[serde(default)]
+    pub mysql_settings: MySqlVisualSettings,
+    #[serde(default)]
+    pub nginx_settings: NginxVisualSettings,
 }
 
 impl Default for PersistentSettings {
@@ -63,6 +72,9 @@ impl Default for PersistentSettings {
             custom_htdocs_path: None,
             custom_php_paths: HashMap::new(),
             extra_php_versions: Vec::new(),
+            php_settings: PhpVisualSettings::default(),
+            mysql_settings: MySqlVisualSettings::default(),
+            nginx_settings: NginxVisualSettings::default(),
         }
     }
 }
@@ -105,6 +117,11 @@ impl PersistentSettings {
             .with_ports(self.http_port, self.php_fastcgi_port, self.mysql_port)
             .with_https_port(self.https_port)
             .with_htdocs_root(&self.effective_htdocs(app_root))
+            .with_visual_settings(
+                self.php_settings.clone(),
+                self.mysql_settings.clone(),
+                self.nginx_settings.clone(),
+            )
     }
 
     pub fn php_home(&self, app_root: &Path, version: &str) -> PathBuf {
@@ -128,6 +145,75 @@ pub struct AppState {
     pub binary_manager: Arc<BinaryManager>,
     pub ssl_manager: Arc<SslManager>,
     pub cli_env: Arc<CliEnvManager>,
+    pub config_editor: Arc<ConfigEditorManager>,
+}
+
+impl AppState {
+    pub async fn build_sandbox_config(&self) -> SandboxConfig {
+        let settings = self.settings.lock().await.clone();
+        settings.sandbox_config(&self.app_root).with_custom_raw(
+            self.config_editor.read_custom_raw(ConfigTarget::Php),
+            self.config_editor.read_custom_raw(ConfigTarget::MySql),
+            self.config_editor.read_custom_raw(ConfigTarget::Nginx),
+        )
+    }
+
+    /// Restart only the service whose config just changed (if it was running).
+    pub async fn reload_single_service(&self, target: ConfigTarget) -> Result<(), String> {
+        let statuses = self.orchestrator.get_all_statuses().await;
+        let settings = self.settings.lock().await.clone();
+
+        match target {
+            ConfigTarget::Php => {
+                if matches!(
+                    statuses.get(&ServiceType::Php),
+                    Some(ServiceStatus::Running { .. })
+                ) {
+                    self.orchestrator
+                        .stop_service(ServiceType::Php)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let php_home =
+                        settings.php_home(&self.app_root, &settings.active_php_version);
+                    self.orchestrator
+                        .start_php_at(&php_home, settings.php_fastcgi_port)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            ConfigTarget::Nginx => {
+                if matches!(
+                    statuses.get(&ServiceType::Nginx),
+                    Some(ServiceStatus::Running { .. })
+                ) {
+                    self.orchestrator
+                        .stop_service(ServiceType::Nginx)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    self.orchestrator
+                        .start_nginx(settings.http_port)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            ConfigTarget::MySql => {
+                if matches!(
+                    statuses.get(&ServiceType::MySql),
+                    Some(ServiceStatus::Running { .. })
+                ) {
+                    self.orchestrator
+                        .stop_service(ServiceType::MySql)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    self.orchestrator
+                        .start_mysql(settings.mysql_port)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Where we persist the user-chosen sandbox folder (outside the sandbox itself).
@@ -1705,6 +1791,142 @@ async fn open_project_terminal(
         .map_err(|e| e.to_string())
 }
 
+// ============================================================================
+// Config Editor (3-layer hybrid: visual + custom raw + nginx -t rollback)
+// ============================================================================
+
+#[tauri::command]
+async fn get_php_extensions_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<PhpExtensionInfo>, String> {
+    let settings = state.settings.lock().await;
+    state
+        .config_editor
+        .scan_available_php_extensions(
+            &settings.active_php_version,
+            &settings.php_settings.enabled_extensions,
+        )
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn save_visual_config(
+    target: ConfigTarget,
+    php_settings: Option<PhpVisualSettings>,
+    mysql_settings: Option<MySqlVisualSettings>,
+    nginx_settings: Option<NginxVisualSettings>,
+    state: State<'_, AppState>,
+) -> Result<PersistentSettings, String> {
+    let updated = {
+        let mut settings = state.settings.lock().await;
+        if let Some(php) = php_settings {
+            settings.php_settings = php;
+        }
+        if let Some(mysql) = mysql_settings {
+            settings.mysql_settings = mysql;
+        }
+        if let Some(nginx) = nginx_settings {
+            settings.nginx_settings = nginx;
+        }
+        settings.save(&state.app_root)?;
+        settings.clone()
+    };
+
+    let sandbox_cfg = state.build_sandbox_config().await;
+    render_all_configs(&state.app_root, &sandbox_cfg).map_err(|e| e.to_string())?;
+    state.reload_single_service(target).await?;
+
+    append_praews_log(
+        &state.app_root,
+        &format!("Visual config saved for {:?}", target),
+    );
+    Ok(updated)
+}
+
+#[tauri::command]
+async fn get_custom_raw_config(
+    target: ConfigTarget,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    Ok(state.config_editor.read_custom_raw(target))
+}
+
+#[tauri::command]
+async fn save_custom_raw_config(
+    target: ConfigTarget,
+    raw_content: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let backup_content = state.config_editor.read_custom_raw(target);
+
+    state
+        .config_editor
+        .save_custom_raw(target, &raw_content)
+        .map_err(|e| e.to_string())?;
+
+    let sandbox_cfg = state.build_sandbox_config().await;
+    render_all_configs(&state.app_root, &sandbox_cfg).map_err(|e| e.to_string())?;
+
+    if target == ConfigTarget::Nginx {
+        if let Err(validation_err) = state.config_editor.validate_nginx_config().await {
+            let _ = state.config_editor.save_custom_raw(target, &backup_content);
+            let fallback_cfg = state.build_sandbox_config().await;
+            let _ = render_all_configs(&state.app_root, &fallback_cfg);
+            return Err(validation_err.to_string());
+        }
+    }
+
+    state.reload_single_service(target).await?;
+    append_praews_log(
+        &state.app_root,
+        &format!("Custom raw config saved for {:?}", target),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+async fn reset_service_config(
+    target: ConfigTarget,
+    state: State<'_, AppState>,
+) -> Result<PersistentSettings, String> {
+    let updated = {
+        let mut settings = state.settings.lock().await;
+        match target {
+            ConfigTarget::Php => settings.php_settings = PhpVisualSettings::default(),
+            ConfigTarget::MySql => settings.mysql_settings = MySqlVisualSettings::default(),
+            ConfigTarget::Nginx => settings.nginx_settings = NginxVisualSettings::default(),
+        }
+        settings.save(&state.app_root)?;
+        settings.clone()
+    };
+
+    state
+        .config_editor
+        .save_custom_raw(target, "")
+        .map_err(|e| e.to_string())?;
+
+    let sandbox_cfg = state.build_sandbox_config().await;
+    render_all_configs(&state.app_root, &sandbox_cfg).map_err(|e| e.to_string())?;
+    state.reload_single_service(target).await?;
+
+    append_praews_log(
+        &state.app_root,
+        &format!("Config reset to factory defaults for {:?}", target),
+    );
+    Ok(updated)
+}
+
+#[tauri::command]
+async fn open_rendered_config_in_os(
+    target: ConfigTarget,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .config_editor
+        .open_in_external_editor(target)
+        .map_err(|e| e.to_string())
+}
+
 /// Brand mark used for Dock (macOS) / tray when the bundled default icon is missing.
 const APP_ICON_PNG: &[u8] = include_bytes!("../icons/icon.png");
 
@@ -1833,6 +2055,7 @@ pub fn run() {
         binary_manager: Arc::new(binary_manager),
         ssl_manager: Arc::new(SslManager::new(&app_root)),
         cli_env: Arc::new(CliEnvManager::new(&app_root)),
+        config_editor: Arc::new(ConfigEditorManager::new(&app_root)),
     };
 
     let app = tauri::Builder::default()
@@ -1882,6 +2105,12 @@ pub fn run() {
             reset_app_root,
             update_htdocs_root,
             verify_portable,
+            get_php_extensions_list,
+            save_visual_config,
+            get_custom_raw_config,
+            save_custom_raw_config,
+            reset_service_config,
+            open_rendered_config_in_os,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Tauri app");

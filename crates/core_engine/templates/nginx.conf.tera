@@ -20,8 +20,8 @@ http {
     access_log "{{ app_root }}/logs/nginx_access.log" main;
 
     sendfile            on;
-    keepalive_timeout   65;
-    client_max_body_size 128M;
+    keepalive_timeout   {{ nginx_settings.keepalive_timeout }};
+    client_max_body_size {{ nginx_settings.client_max_body_size }};
 
     # Force all temp dirs into the portable sandbox
     client_body_temp_path "{{ app_root }}/temp/nginx/client_body";
@@ -29,6 +29,11 @@ http {
     fastcgi_temp_path     "{{ app_root }}/temp/nginx/fastcgi";
     uwsgi_temp_path       "{{ app_root }}/temp/nginx/uwsgi";
     scgi_temp_path        "{{ app_root }}/temp/nginx/scgi";
+
+    # =================================================================
+    # USER CUSTOM HTTP DIRECTIVES (Dari conf/custom/nginx_http_custom.conf)
+    # =================================================================
+    {{ nginx_custom_raw }}
 
     server {
         listen {{ http_port }};

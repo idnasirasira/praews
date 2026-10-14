@@ -27,11 +27,18 @@ collation-server = utf8mb4_unicode_ci
 # Local-dev performance
 skip-name-resolve
 default_storage_engine = InnoDB
-innodb_buffer_pool_size = 256M
 innodb_log_file_size = 64M
 innodb_file_per_table = 1
-max_allowed_packet = 64M
-max_connections = 150
 
 # Easier imports of older dumps
 sql_mode = NO_ENGINE_SUBSTITUTION
+
+# --- VISUAL TUNING SETTINGS (Dikontrol dari UI) ---
+max_connections = {{ mysql_settings.max_connections }}
+innodb_buffer_pool_size = {{ mysql_settings.innodb_buffer_pool_size }}
+max_allowed_packet = {{ mysql_settings.max_allowed_packet }}
+
+# =====================================================================
+# USER CUSTOM OVERRIDES (Dari conf/custom/my_custom.cnf)
+# =====================================================================
+{{ mysql_custom_raw }}

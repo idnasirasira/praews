@@ -1,3 +1,6 @@
+use crate::config_editor::{
+    ConfigEditorManager, ConfigTarget, MySqlVisualSettings, NginxVisualSettings, PhpVisualSettings,
+};
 use crate::sandbox::{init_sandbox, normalize_path};
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -17,6 +20,16 @@ pub struct SandboxConfig {
     pub php_version: String,
     pub timezone: String,
     pub is_windows: bool,
+
+    // Layer 1: Visual UI settings
+    pub php_settings: PhpVisualSettings,
+    pub mysql_settings: MySqlVisualSettings,
+    pub nginx_settings: NginxVisualSettings,
+
+    // Layer 2: Custom raw snippets from conf/custom/
+    pub php_custom_raw: String,
+    pub mysql_custom_raw: String,
+    pub nginx_custom_raw: String,
 }
 
 impl SandboxConfig {
@@ -33,6 +46,7 @@ impl SandboxConfig {
         });
         let app_root = normalize_path(&absolute);
         let htdocs_root = normalize_path(&absolute.join("htdocs"));
+        let editor = ConfigEditorManager::new(&absolute);
 
         Self {
             app_root,
@@ -44,6 +58,12 @@ impl SandboxConfig {
             php_version: php_version.to_string(),
             timezone: "Asia/Jakarta".to_string(),
             is_windows: cfg!(target_os = "windows"),
+            php_settings: PhpVisualSettings::default(),
+            mysql_settings: MySqlVisualSettings::default(),
+            nginx_settings: NginxVisualSettings::default(),
+            php_custom_raw: editor.read_custom_raw(ConfigTarget::Php),
+            mysql_custom_raw: editor.read_custom_raw(ConfigTarget::MySql),
+            nginx_custom_raw: editor.read_custom_raw(ConfigTarget::Nginx),
         }
     }
 
@@ -72,6 +92,25 @@ impl SandboxConfig {
         self.htdocs_root = normalize_path(&absolute);
         self
     }
+
+    pub fn with_visual_settings(
+        mut self,
+        php: PhpVisualSettings,
+        mysql: MySqlVisualSettings,
+        nginx: NginxVisualSettings,
+    ) -> Self {
+        self.php_settings = php;
+        self.mysql_settings = mysql;
+        self.nginx_settings = nginx;
+        self
+    }
+
+    pub fn with_custom_raw(mut self, php: String, mysql: String, nginx: String) -> Self {
+        self.php_custom_raw = php;
+        self.mysql_custom_raw = mysql;
+        self.nginx_custom_raw = nginx;
+        self
+    }
 }
 
 /// Render core service configs from `templates/*.tera` into `conf/`.
@@ -82,6 +121,7 @@ pub fn render_all_configs(app_root: &Path, config: &SandboxConfig) -> Result<()>
     for (name, body) in [
         ("nginx.conf.tera", include_str!("../templates/nginx.conf.tera")),
         ("php.ini.tera", include_str!("../templates/php.ini.tera")),
+        ("my.cnf.tera", include_str!("../templates/my.cnf.tera")),
     ] {
         let path = app_root.join("templates").join(name);
         fs::write(&path, body).with_context(|| format!("failed to refresh {:?}", path))?;

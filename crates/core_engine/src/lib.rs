@@ -2,6 +2,7 @@
 
 pub mod binary_manager;
 pub mod cli_env;
+pub mod config_editor;
 pub mod config_engine;
 pub mod dns_server;
 pub mod error;
@@ -15,6 +16,10 @@ pub mod vhost;
 
 pub use binary_manager::{BinaryManager, ComponentSpec, DownloadProgress};
 pub use cli_env::CliEnvManager;
+pub use config_editor::{
+    ConfigEditorManager, ConfigTarget, MySqlVisualSettings, NginxVisualSettings, PhpExtensionInfo,
+    PhpVisualSettings,
+};
 pub use config_engine::{
     render_all_configs, render_all_vhosts, render_vhost, SandboxConfig, VhostConfig,
 };

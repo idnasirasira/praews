@@ -9,7 +9,7 @@ serialize_precision = -1
 zend.enable_gc = On
 expose_php = On
 
-; Resource Limits (local development)
+; Resource Limits — visual defaults (overridden below from UI)
 max_execution_time = 300
 max_input_time = 300
 memory_limit = 512M
@@ -31,19 +31,6 @@ max_file_uploads = 20
 {% if is_windows %}
 ; Windows NTS builds ship shared DLLs under ext/
 extension_dir = "{{ app_root }}/bin/php/{{ php_version }}/ext"
-
-extension=curl
-extension=fileinfo
-extension=gd
-extension=intl
-extension=mbstring
-extension=exif
-extension=mysqli
-extension=openssl
-extension=pdo_mysql
-extension=pdo_sqlite
-extension=sqlite3
-extension=zip
 zend_extension=opcache
 {% else %}
 ; macOS/Linux static-php builds compile extensions into the binary.
@@ -74,3 +61,23 @@ opcache.memory_consumption=128
 opcache.interned_strings_buffer=8
 opcache.max_accelerated_files=10000
 opcache.revalidate_freq=0
+
+; --- VISUAL TUNING SETTINGS (Dikontrol dari UI) ---
+max_execution_time = {{ php_settings.max_execution_time }}
+max_input_time = {{ php_settings.max_input_time }}
+memory_limit = {{ php_settings.memory_limit }}
+post_max_size = {{ php_settings.post_max_size }}
+upload_max_filesize = {{ php_settings.upload_max_filesize }}
+display_errors = {% if php_settings.display_errors %}On{% else %}Off{% endif %}
+
+{% if is_windows %}
+; --- DYNAMIC EXTENSIONS (Dikontrol dari Checkbox UI) ---
+{% for ext in php_settings.enabled_extensions %}
+extension={{ ext }}
+{% endfor %}
+{% endif %}
+
+; =====================================================================
+; USER CUSTOM OVERRIDES (Dari conf/custom/php_custom.ini - Aman dari Overwrite)
+; =====================================================================
+{{ php_custom_raw }}

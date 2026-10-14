@@ -12,6 +12,7 @@ pub const REQUIRED_DIRS: &[&str] = &[
     "temp/composer",
     "conf/vhosts",
     "conf/ssl",
+    "conf/custom",
     "templates",
     "logs",
     "htdocs",

@@ -11,6 +11,7 @@ const nav = [
   { name: "dashboard", label: "Stack", to: "/" },
   { name: "sites", label: "Sites", to: "/sites" },
   { name: "ports", label: "Ports", to: "/ports" },
+  { name: "config", label: "Config", to: "/config" },
   { name: "phone", label: "Phone", to: "/phone" },
   { name: "logs", label: "Logs", to: "/logs" },
   { name: "php", label: "PHP", to: "/php" },
@@ -41,8 +42,8 @@ onMounted(async () => {
         <p class="tagline">portable local stack · zero system pollution</p>
       </div>
       <div class="power">
-        <button class="btn btn-go" type="button" @click="store.startAll()">Start</button>
-        <button class="btn btn-halt" type="button" @click="store.stopAll()">Stop</button>
+        <button class="btn btn-go" type="button" @click="store.startAll()">Start all</button>
+        <button class="btn btn-halt" type="button" @click="store.stopAll()">Stop all</button>
       </div>
     </header>
 
