@@ -2,6 +2,8 @@
 
 Portable local web server environment (Nginx + PHP + MariaDB) built with Rust — **zero system pollution**. Everything lives inside a sandbox folder; delete the folder and the machine is clean again.
 
+**v1.0 (macOS first):** Apple Silicon is the primary release target. Windows and Intel Mac MariaDB downloads can follow.
+
 ## Workspace
 
 | Crate | Role |
@@ -30,7 +32,7 @@ cargo run -p core_engine -- --root ./sandbox add-site myapp.test --path ./sandbo
 # Local DNS for *.test (port 53535; pair with macOS /etc/resolver/test if desired)
 cargo run -p core_engine -- --root ./sandbox dns
 
-# Install portable binaries (Windows URLs ready in manifest; macOS needs archive URLs)
+# Install portable binaries (Windows + macOS arm64 URLs in manifest)
 cargo run -p core_engine -- --root ./sandbox install nginx
 
 # GUI (Tauri + Vue 3) — uses ./dev_sandbox in debug builds
