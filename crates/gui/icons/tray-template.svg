@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="praews">
+  <!-- Menu-bar template: black mark on transparent (no filled square).
+       macOS template tint turns black ’ menu-bar foreground. -->
+  <rect x="118" y="156" width="118" height="36" rx="10" fill="#000"/>
+  <rect x="118" y="214" width="148" height="36" rx="10" fill="#000"/>
+  <rect x="118" y="272" width="118" height="36" rx="10" fill="#000"/>
+  <rect x="278" y="156" width="44" height="220" rx="14" fill="#000"/>
+  <path
+    fill="#000"
+    d="M322 156h62c52 0 90 36 90 86s-38 86-90 86h-62V156zm44 48v76h18c24 0 42-16 42-38s-18-38-42-38h-18z"
+  />
+</svg>

@@ -1927,11 +1927,17 @@ async fn open_rendered_config_in_os(
         .map_err(|e| e.to_string())
 }
 
-/// Brand mark used for Dock (macOS) / tray when the bundled default icon is missing.
+/// Brand mark used for Dock (macOS) when the bundled default icon is missing.
 const APP_ICON_PNG: &[u8] = include_bytes!("../icons/icon.png");
+/// Menu-bar tray template: mark only on transparent (no filled square).
+const TRAY_TEMPLATE_PNG: &[u8] = include_bytes!("../icons/tray-template.png");
 
 fn load_app_icon() -> Option<tauri::image::Image<'static>> {
     tauri::image::Image::from_bytes(APP_ICON_PNG).ok()
+}
+
+fn load_tray_icon() -> Option<tauri::image::Image<'static>> {
+    tauri::image::Image::from_bytes(TRAY_TEMPLATE_PNG).ok()
 }
 
 /// macOS Dock uses the .app bundle icon — `cargo run` has none, so set it at runtime.
@@ -2098,11 +2104,11 @@ async fn refresh_tray_status(app: &AppHandle) {
 fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let tray_menu = build_tray_menu(app, "Stack · Stopped")?;
 
-    let tray_icon = app
-        .default_window_icon()
-        .map(|icon| icon.clone().to_owned())
+    // Use a silhouette mark (transparent bg). The full app icon becomes a solid white
+    // blob under macOS `icon_as_template` because its filled square is all opaque.
+    let tray_icon = load_tray_icon()
         .or_else(load_app_icon)
-        .ok_or("praews icon missing (icons/icon.png)")?;
+        .ok_or("praews tray icon missing (icons/tray-template.png)")?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .icon(tray_icon)

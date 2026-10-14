@@ -39,7 +39,7 @@ onMounted(async () => {
     <header class="masthead">
       <div class="identity">
         <div class="brand-row">
-          <img class="brand-mark" :src="markUrl" width="44" height="44" alt="" />
+          <img class="brand-mark" :src="markUrl" width="32" height="32" alt="" />
           <h1 class="brand">praews</h1>
           <span class="stack-pill" :class="stack.kind" :title="`Stack · ${stack.label}`">
             <span class="stack-dot" aria-hidden="true" />
